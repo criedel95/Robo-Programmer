@@ -58,4 +58,3 @@ Launch-Latest-RoboProgrammer.ps1
 Copyright 2026 Christian W. R. Riedelsheimer.
 
 See [`V5.0/LICENSE`](V5.0/LICENSE) for the complete source-available license terms. The license includes a commercial restriction and is not OSI-approved open source.
-
