@@ -1,0 +1,63 @@
+{
+  "name": "robo-programmer",
+  "version": "5.0.0",
+  "description": "Fanuc LS programming and diagnostic application",
+  "main": "desktop-main.js",
+  "author": {
+    "name": "Christian W. R. Riedelsheimer"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
+  "scripts": {
+    "desktop": "electron .",
+    "build:windows": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.crcontrols.roboprogrammer",
+    "productName": "Robo Programmer",
+    "artifactName": "Robo Programmer Setup ${version}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "../Build Exports"
+    },
+    "files": [
+      "app.js",
+      "app-branding.json",
+      "assets/**/*",
+      "Data Assignments.xlsx",
+      "desktop-main.js",
+      "index.html",
+      "styles.css"
+    ],
+    "win": {
+      "icon": "assets/robo-programmer.ico",
+      "executableName": "Robo Programmer",
+      "legalTrademarks": "CR Controls",
+      "signExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "assets/robo-programmer.ico",
+      "oneClick": false,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "shortcutName": "Robo Programmer",
+      "uninstallerIcon": "assets/robo-programmer.ico"
+    }
+  }
+}

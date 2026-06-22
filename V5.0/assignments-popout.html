@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Data Assignments - Robo Programmer V5.0</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="assignments-popout-body">
+    <main class="assignments-popout-shell">
+      <header class="assignments-toolbar assignments-popout-toolbar">
+        <div>
+          <span class="eyebrow">Spreadsheet</span>
+          <h2>Data Assignments</h2>
+        </div>
+        <div class="assignments-actions">
+          <div id="popoutAssignmentPath" class="assignment-path">Connecting to the main Robo Programmer window...</div>
+          <button id="popInAssignmentsBtn" type="button" title="Return Data Assignments to the main Robo Programmer window and close this pop-out.">Pop-in</button>
+        </div>
+      </header>
+      <div id="popoutAssignmentSheetTabs" class="assignment-sheet-tabs" role="tablist" aria-label="Data assignment sheets"></div>
+      <div id="popoutAssignmentStatus" class="assignment-status">Connecting to the main Robo Programmer window...</div>
+      <div id="popoutAssignmentTableWrap" class="assignment-table-wrap"></div>
+      <div id="popoutDisconnected" class="assignments-popout-disconnected" hidden>
+        <h2>Main window unavailable</h2>
+        <p>Return to the main Robo Programmer window and open Data Assignments again.</p>
+      </div>
+    </main>
+    <script src="assignments-popout.js"></script>
+  </body>
+</html>
