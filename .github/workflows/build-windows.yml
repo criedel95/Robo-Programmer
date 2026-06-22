@@ -1,0 +1,73 @@
+name: Build Windows Deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "V5.0/**"
+      - ".github/workflows/build-windows.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "V5.0/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-deployment-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.3
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: V5.0/pnpm-lock.yaml
+
+      - name: Install locked dependencies
+        working-directory: V5.0
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows installer
+        working-directory: V5.0
+        run: pnpm run build:windows
+
+      - name: Name deployment artifact
+        id: artifact
+        run: |
+          $package = Get-Content -Raw "V5.0/package.json" | ConvertFrom-Json
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          "name=Robo-Programmer-$($package.version)-$shortSha" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: Build Exports/*.exe
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+

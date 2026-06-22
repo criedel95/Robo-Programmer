@@ -43,6 +43,12 @@ npm run build:windows
 
 Generated installers are written to `Build Exports` and are intentionally excluded from source control.
 
+## Automated Windows deployments
+
+GitHub Actions builds a fresh Windows installer whenever application or workflow changes reach `main`. Pull requests targeting `main` are built as a validation check, and maintainers can also start a build manually from the repository's **Actions** tab.
+
+Each successful run publishes a private `Robo-Programmer-<version>-<commit>` workflow artifact containing the installer. Build artifacts are retained for 30 days and are not committed to the repository.
+
 ## Repository layout
 
 ```text
