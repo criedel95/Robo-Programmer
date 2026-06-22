@@ -25,21 +25,6 @@ For the portable Windows experience, open `V5.0` and run:
 Robo Programmer V5.0.cmd
 ```
 
-For desktop development:
-
-```powershell
-cd V5.0
-npm install
-npm run desktop
-```
-
-To build the Windows installer:
-
-```powershell
-cd V5.0
-npm install
-npm run build:windows
-```
 
 Generated installers are written to `Build Exports` and are intentionally excluded from source control.
 
