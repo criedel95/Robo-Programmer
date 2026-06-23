@@ -4,7 +4,9 @@ Robo Programmer is a Windows-focused Fanuc LS programming and diagnostic applica
 Use in tandem with a live Fanuc robot or Roboguide to get the most out of this.  When connected, Robo Programmer acts similar to an online PLC editor, where programs can be monitored and modified from Robo Programmer on your PC.  Comments, registers, and positions register can be read/written.  Backups can be pulled and downloaded directly to your PC.  Live position and line-by-line program monitoring are available.  
 
 For the Online Robot portion of this project to run with all features, two robot options are required:
+
 FTP Interface (R796)
+
 ASCII Program Loader (J716)
 
 > This repository is private and under active development. The current maintained source is **V5.0**.
