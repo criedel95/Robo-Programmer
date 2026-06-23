@@ -42,6 +42,8 @@ Launch-Latest-RoboProgrammer.ps1
 If you find it useful, Bitcoin donations are appreciated and help pay for the AI compute used to develop the project.
 **Bitcoin (BTC) donation address:** `bc1qma2t9e56qfg2a2lfjvdgx433mn544v04zhtzel`
 
+** I know there are bugs.  This is still in development and is being tested on real integrator projects.  Constructive feedback is appreciated. **
+
 ## License
 
 Copyright 2026 Christian W. R. Riedelsheimer.
