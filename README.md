@@ -1,6 +1,7 @@
 # Robo Programmer
 
 Robo Programmer is a Windows-focused Fanuc LS programming and diagnostic application. It combines a browser-based editor with PowerShell launchers.  Refer to Robo Programmer Instructions.txt for a full set of functions and instruction.
+Use in tandem with a live Fanuc robot or Roboguide to get the most out of this.  When connected, Robot Programmer acts similar to an online PLC editor, where programs can be monitored and modified from you Robo Programmer on your PC.  Comments, registers, and positions register can be read/written.  Backups can be pulled and downloaded directly to you PC directory.  Live position and line-by-line program monitoring are available.  
 
 > This repository is private and under active development. The current maintained source is **V5.0**.
 
