@@ -1,6 +1,6 @@
 # Robo Programmer
 
-Robo Programmer is a Windows-focused Fanuc LS programming and diagnostic application. It combines a browser-based editor with an optional Electron desktop build and portable PowerShell launchers.
+Robo Programmer is a Windows-focused Fanuc LS programming and diagnostic application. It combines a browser-based editor with PowerShell launchers.  Refer to Robo Programmer Instructions.txt for a full set of functions and instruction.
 
 > This repository is private and under active development. The current maintained source is **V5.0**.
 
@@ -37,6 +37,9 @@ Test Exports/                 Generated test packages (ignored)
 V1.0/ ... V4.4/               Local historical snapshots (ignored)
 Launch-Latest-RoboProgrammer.ps1
 ```
+
+If you find it useful, Bitcoin donations are appreciated and help pay for the AI compute used to develop the project.
+**Bitcoin (BTC) donation address:** `bc1qma2t9e56qfg2a2lfjvdgx433mn544v04zhtzel`
 
 ## License
 
