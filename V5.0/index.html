@@ -23,7 +23,7 @@
                 <button id="exportRoboProjectBtn" type="button" role="menuitem">Export Project as ROBO</button>
                 <button id="saveBtn" type="button" role="menuitem">Save</button>
                 <button id="reloadAssignmentsBtn" type="button" role="menuitem" title="Reload comments from Data Assignments.xlsx and refresh the Data Assignments view. Use this after the spreadsheet was edited outside Robo Programmer.">Reload Comments From Spreadsheet</button>
-                <button id="pushAssignmentsMenuBtn" type="button" role="menuitem" title="Update Data Assignments.xlsx from changed visible edits and LS-derived names. Automatic cell edits usually handle this already.">Push Data Assignments to Spreadsheet</button>
+                <button id="pushAssignmentsMenuBtn" type="button" role="menuitem" title="Update Data Assignments.xlsx from changed visible edits and LS-derived descriptions. Automatic cell edits usually handle this already.">Push LS Descriptions to Data Assignments</button>
                 <button id="syncAssignmentsMenuBtn" type="button" role="menuitem" title="Apply the spreadsheet descriptions across LS files and backfill blank spreadsheet names from LS comments. Use this after outside edits or repair work.">Sync Data Assignments to LS Files</button>
                 <button id="closeProjectBtn" type="button" role="menuitem">Close Project</button>
                 <div class="menu-separator" role="separator"></div>
@@ -113,6 +113,7 @@
                   <div class="editor-title">
                     <button id="toggleHeaderBtn" class="small-toggle" type="button" aria-pressed="false">Show Header</button>
                     <span id="currentFileName">No file selected</span>
+                    <button id="copyCurrentPathBtn" class="small-toggle copy-path-button" type="button" disabled title="Copy the current LS file's Windows path to the clipboard.">Copy Path</button>
                   </div>
                   <div class="editor-tools">
                     <button id="splitEditorBtn" class="icon-button" type="button" aria-pressed="false">Split</button>

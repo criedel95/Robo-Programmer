@@ -215,6 +215,9 @@ Show Footer:
 Split:
   Opens a second editor beside the main editor. Select another LS file from the Split View dropdown. Teach Pendant and Advanced TP actions apply to whichever editor was used most recently.
 
+Copy Path:
+  Copies the full Windows path of the current LS file to the clipboard when the project was opened from its generated launcher.
+
 Export:
   Exports the currently open LS file to another location without saving over the original project file.
 
@@ -439,8 +442,8 @@ Edit a description:
 Reload Spreadsheet:
   Reloads the workbook from disk and discards the currently displayed workbook copy. Each assignment section heading refreshes to show the actual number of available items found in the spreadsheet.
 
-Push to Spreadsheet:
-  Writes visible description edits and names found in project LS files into Data Assignments.xlsx.
+Push LS Descriptions to Data Assignments:
+  Writes visible description edits and descriptions found in project LS files into Data Assignments.xlsx.
 
 Sync To LS Files:
   Applies spreadsheet descriptions to matching references in the project LS files and backfills blank spreadsheet descriptions from LS files.

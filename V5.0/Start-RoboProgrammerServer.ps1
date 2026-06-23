@@ -331,6 +331,116 @@ function Handle-RobotBackupRequest {
   }
 }
 
+function Test-RoboProjectPathCandidate {
+  param(
+    [string]$CandidatePath,
+    [string[]]$LsFiles
+  )
+
+  if (-not (Test-Path -LiteralPath $CandidatePath -PathType Container)) { return $false }
+  $hasProjectConfig = @(Get-ChildItem -LiteralPath $CandidatePath -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -ieq "robo-project.json" -or $_.Extension -ieq ".roboproject"
+  }).Count -gt 0
+  if (-not $hasProjectConfig) { return $false }
+
+  $lsPath = Join-Path $CandidatePath "LS Files"
+  if (-not (Test-Path -LiteralPath $lsPath -PathType Container)) {
+    $lsPath = $CandidatePath
+  }
+
+  if (-not (Test-Path -LiteralPath $lsPath -PathType Container)) { return $false }
+  foreach ($fileName in @($LsFiles | Select-Object -First 20)) {
+    $safeName = [System.IO.Path]::GetFileName([string]$fileName)
+    if ([string]::IsNullOrWhiteSpace($safeName)) { continue }
+    if (-not (Test-Path -LiteralPath (Join-Path $lsPath $safeName) -PathType Leaf)) {
+      return $false
+    }
+  }
+
+  return $true
+}
+
+function Resolve-RoboProjectPath {
+  param(
+    [string]$ProjectName,
+    [string[]]$LsFiles
+  )
+
+  $safeName = [System.IO.Path]::GetFileName($ProjectName)
+  if ([string]::IsNullOrWhiteSpace($safeName) -or $safeName -ne $ProjectName) {
+    throw "Invalid project name."
+  }
+
+  $roots = New-Object System.Collections.Generic.List[string]
+  $userProfile = $env:USERPROFILE
+  foreach ($path in @(
+    [Environment]::GetFolderPath("MyDocuments"),
+    [Environment]::GetFolderPath("Desktop"),
+    (Join-Path $userProfile "Documents"),
+    (Join-Path $userProfile "Desktop"),
+    (Join-Path $userProfile "Downloads")
+  )) {
+    if ($path -and (Test-Path -LiteralPath $path -PathType Container) -and -not $roots.Contains($path)) {
+      $roots.Add($path)
+    }
+  }
+  if ($userProfile -and (Test-Path -LiteralPath $userProfile -PathType Container)) {
+    $oneDriveRoots = New-Object System.Collections.Generic.List[string]
+    foreach ($oneDriveRoot in @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer)) {
+      if ($oneDriveRoot -and (Test-Path -LiteralPath $oneDriveRoot -PathType Container) -and -not $oneDriveRoots.Contains($oneDriveRoot)) {
+        $oneDriveRoots.Add($oneDriveRoot)
+      }
+    }
+    Get-ChildItem -LiteralPath $userProfile -Directory -Filter "OneDrive*" -ErrorAction SilentlyContinue | ForEach-Object {
+      if (-not $oneDriveRoots.Contains($_.FullName)) { $oneDriveRoots.Add($_.FullName) }
+    }
+    $oneDriveRoots | ForEach-Object {
+      $oneDriveRootPath = [string]$_
+      foreach ($oneDrivePath in @(
+        (Join-Path $oneDriveRootPath "Documents"),
+        (Join-Path $oneDriveRootPath "Desktop"),
+        (Join-Path $oneDriveRootPath "Projects")
+      )) {
+        if ((Test-Path -LiteralPath $oneDrivePath -PathType Container) -and -not $roots.Contains($oneDrivePath)) {
+          $roots.Add($oneDrivePath)
+        }
+      }
+    }
+  }
+
+  $matches = New-Object System.Collections.Generic.List[string]
+  foreach ($searchRoot in $roots) {
+    if ($matches.Count -gt 1) { break }
+    try {
+      Get-ChildItem -LiteralPath $searchRoot -Directory -Filter $safeName -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($matches.Count -le 1 -and (Test-RoboProjectPathCandidate $_.FullName $LsFiles)) {
+          if (-not $matches.Contains($_.FullName)) { $matches.Add($_.FullName) }
+        }
+      }
+    } catch {
+    }
+  }
+
+  if ($matches.Count -eq 1) { return $matches[0] }
+  if ($matches.Count -gt 1) { throw "Multiple matching project folders were found." }
+  throw "No matching project folder was found in common Windows locations."
+}
+
+function Handle-ProjectPathRequest {
+  param(
+    [System.Net.Sockets.NetworkStream]$Stream,
+    [string]$RequestBody
+  )
+
+  try {
+    $payload = $RequestBody | ConvertFrom-Json
+    $projectPath = Resolve-RoboProjectPath ([string]$payload.projectName) @($payload.lsFiles)
+    Send-JsonResponse $Stream 200 "OK" @{ ok = $true; path = $projectPath }
+  } catch {
+    Send-JsonResponse $Stream 404 "Not Found" @{ ok = $false; error = $_.Exception.Message }
+  }
+}
+
 function ConvertFrom-FanucNumber {
   param([string]$Value)
 
@@ -1487,6 +1597,11 @@ try {
 
       if ($method -eq "POST" -and $pathOnly -in @("/robot-backup/inventory", "/robot-backup/file", "/robot-backup/download")) {
         Handle-RobotBackupRequest $stream $pathOnly $requestBody
+        continue
+      }
+
+      if ($method -eq "POST" -and $pathOnly -eq "/project-path/resolve") {
+        Handle-ProjectPathRequest $stream $requestBody
         continue
       }
 

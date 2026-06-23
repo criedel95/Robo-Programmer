@@ -115,6 +115,7 @@ const robotCommentsTableWrap = document.querySelector("#robotCommentsTableWrap")
 const projectStatus = document.querySelector("#projectStatus");
 const projectNameEl = document.querySelector("#projectName");
 const currentFileNameEl = document.querySelector("#currentFileName");
+const copyCurrentPathBtn = document.querySelector("#copyCurrentPathBtn");
 const creatorCredit = document.querySelector("#creatorCredit");
 const fileListEl = document.querySelector("#fileList");
 const newLsBtn = document.querySelector("#newLsBtn");
@@ -421,6 +422,7 @@ let undoStack = [];
 let redoStack = [];
 let historySuppressed = false;
 let lastEditorValue = "";
+let lastSplitEditorValue = "";
 let newTpMode = "inst";
 let activeWorkspaceView = "editor";
 let activeAssignmentSheet = "";
@@ -677,6 +679,91 @@ function requestedProjectName() {
   return new URLSearchParams(window.location.search).get("project");
 }
 
+function normalizeWindowsPath(path) {
+  return String(path || "").trim().replaceAll("/", "\\").replace(/\\+$/g, "");
+}
+
+function windowsPathBaseName(path) {
+  const normalized = normalizeWindowsPath(path);
+  return normalized ? normalized.split("\\").filter(Boolean).at(-1) || "" : "";
+}
+
+function requestedProjectRootPath() {
+  return normalizeWindowsPath(new URLSearchParams(window.location.search).get("projectRoot"));
+}
+
+function trustedProjectRootPath(directoryHandle) {
+  const rootPath = requestedProjectRootPath();
+  if (!rootPath || !directoryHandle?.name) return "";
+  return windowsPathBaseName(rootPath).toUpperCase() === directoryHandle.name.toUpperCase()
+    ? rootPath
+    : "";
+}
+
+function currentLsFileWindowsPath() {
+  const file = getCurrentFile();
+  const rootPath = normalizeWindowsPath(project?.projectRootPath);
+  if (!file || !rootPath) return "";
+  const lsFolder = project?.lsDirectoryHandle === project?.directoryHandle ? "" : "LS Files";
+  return [rootPath, lsFolder, file.name].filter(Boolean).join("\\");
+}
+
+function projectRootCacheKey(projectName) {
+  return `robo-programmer-project-root:${encodeURIComponent(safeFolderName(projectName))}`;
+}
+
+function cachedProjectRootPath(projectName) {
+  try {
+    return normalizeWindowsPath(localStorage.getItem(projectRootCacheKey(projectName)));
+  } catch {
+    return "";
+  }
+}
+
+function cacheProjectRootPath(projectName, rootPath) {
+  const normalized = normalizeWindowsPath(rootPath);
+  if (!normalized) return;
+  try {
+    localStorage.setItem(projectRootCacheKey(projectName), normalized);
+  } catch {
+  }
+}
+
+async function resolveProjectRootPath(projectName, files) {
+  try {
+    const response = await fetch("/project-path/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectName,
+        lsFiles: files.map((file) => file.name).slice(0, 200)
+      })
+    });
+    if (!response.ok) return "";
+    const result = await response.json();
+    return result?.ok && result.path ? normalizeWindowsPath(result.path) : "";
+  } catch {
+    return "";
+  }
+}
+
+function resolveProjectRootPathInBackground(projectToResolve) {
+  if (!projectToResolve || projectToResolve.projectRootPath || projectToResolve.pathResolvePending) return;
+  projectToResolve.pathResolvePending = true;
+  resolveProjectRootPath(projectToResolve.name, projectToResolve.files).then((rootPath) => {
+    if (!rootPath) return;
+    cacheProjectRootPath(projectToResolve.name, rootPath);
+    if (project === projectToResolve) {
+      project.projectRootPath = rootPath;
+      project.pathResolvePending = false;
+      updateCopyCurrentPathButton();
+    }
+  }).catch(() => {
+  }).finally(() => {
+    if (projectToResolve) projectToResolve.pathResolvePending = false;
+  });
+}
+
 function safeFolderName(name) {
   return name.trim().replace(/[<>:"/\\|?*]+/g, "_").replace(/\s+/g, " ") || "New Robot Project";
 }
@@ -800,12 +887,15 @@ async function loadProjectFromDirectoryHandle(directoryHandle) {
   const projectMetadata = await readProjectMetadata(directoryHandle);
   const migration = await migrateProjectConfig(directoryHandle, projectMetadata);
   const { files, lsDirectoryHandle } = await readLsFilesFromDirectory(directoryHandle, projectMetadata.favoriteFiles);
+  const launcherRootPath = trustedProjectRootPath(directoryHandle);
+  const resolvedRootPath = launcherRootPath || cachedProjectRootPath(directoryHandle.name);
 
   const nextProject = await attachSpreadsheetHandle({
     name: directoryHandle.name,
     files,
     directoryHandle,
     lsDirectoryHandle,
+    projectRootPath: resolvedRootPath,
     robotAddress: String(projectMetadata.data?.robotAddress || ""),
     robotBackupsDirectoryHandle: await directoryHandle.getDirectoryHandle("Robot Backups", { create: true }),
     canSave: true,
@@ -817,6 +907,8 @@ async function loadProjectFromDirectoryHandle(directoryHandle) {
   } else if (migration.updated) {
     projectStatus.textContent = `${directoryHandle.name} was updated to Robo Programmer project config v${currentProjectConfigVersion}: ${migration.changes.join(", ")}.`;
   }
+  if (launcherRootPath) cacheProjectRootPath(directoryHandle.name, launcherRootPath);
+  else resolveProjectRootPathInBackground(nextProject);
   await saveRecentProject(directoryHandle);
 }
 
@@ -1283,6 +1375,15 @@ async function migrateProjectConfig(directoryHandle, metadata) {
       || metadata.data?.roboProgrammerVersion !== currentRoboProgrammerVersion
       || !metadata.manifestFileName;
     const launcherMissing = !await directoryEntryExists(directoryHandle, launcherName, "file");
+    let launcherNeedsPathUpdate = false;
+    if (!launcherMissing) {
+      try {
+        const launcherFile = await (await directoryHandle.getFileHandle(launcherName, { create: false })).getFile();
+        launcherNeedsPathUpdate = !(await launcherFile.text()).includes("projectRoot=");
+      } catch {
+        launcherNeedsPathUpdate = true;
+      }
+    }
 
     if (needsConfigUpgrade || changes.length) {
       const manifestFileName = metadata.manifestFileName || `${safeFolderName(directoryHandle.name)}.roboproject`;
@@ -1293,7 +1394,7 @@ async function migrateProjectConfig(directoryHandle, metadata) {
       );
       changes.unshift(`updated project config to v${currentProjectConfigVersion}`);
     }
-    if (needsConfigUpgrade || launcherMissing) {
+    if (needsConfigUpgrade || launcherMissing || launcherNeedsPathUpdate) {
       await writeTextFile(directoryHandle, launcherName, createProjectLauncher(directoryHandle.name));
       changes.push(launcherMissing ? "added current project launcher" : "updated project launcher");
     }
@@ -1370,6 +1471,8 @@ setlocal
 
 set "APP_ROOT=${appRootPath}"
 set "PORT=${port}"
+set "PROJECT_ROOT=%~dp0"
+if "%PROJECT_ROOT:~-1%"=="\\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 
 if not exist "%APP_ROOT%\\Start-RoboProgrammerServer.ps1" (
   echo Robo Programmer could not find Start-RoboProgrammerServer.ps1 in:
@@ -1380,7 +1483,9 @@ if not exist "%APP_ROOT%\\Start-RoboProgrammerServer.ps1" (
   exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\\Start-RoboProgrammerServer.ps1" -Port %PORT% -Path "/?project=${encodedProject}&appRoot=${encodedAppRoot}"
+for /f "usebackq delims=" %%I in (\`powershell -NoProfile -Command "[uri]::EscapeDataString($env:PROJECT_ROOT)"\`) do set "ENCODED_PROJECT_ROOT=%%I"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\\Start-RoboProgrammerServer.ps1" -Port %PORT% -Path "/?project=${encodedProject}&appRoot=${encodedAppRoot}&projectRoot=%ENCODED_PROJECT_ROOT%"
 
 endlocal
 `;
@@ -1534,6 +1639,63 @@ async function deleteCurrentLsFile() {
 function updateLoadLsFromRobotButton() {
   loadLsFromRobotBtn.hidden = robotOnlineStatus !== "online";
   loadLsFromRobotBtn.disabled = robotLsLoadActive || !project || !getCurrentFile();
+}
+
+function updateCopyCurrentPathButton() {
+  const file = getCurrentFile();
+  copyCurrentPathBtn.disabled = !file;
+  if (!file) {
+    copyCurrentPathBtn.title = "Select an LS file before copying its path.";
+  } else if (project?.projectRootPath) {
+    copyCurrentPathBtn.title = `Copy the Windows path for ${file.name}`;
+  } else if (project?.pathResolvePending) {
+    copyCurrentPathBtn.title = "Robo Programmer is still resolving this project's Windows path.";
+  } else {
+    copyCurrentPathBtn.title = "Robo Programmer could not resolve this project's full Windows path.";
+  }
+}
+
+async function copyCurrentLsPath() {
+  if (!getCurrentFile()) {
+    projectStatus.textContent = "Select an LS file before copying its path.";
+    updateCopyCurrentPathButton();
+    return;
+  }
+  let filePath = currentLsFileWindowsPath();
+  if (!filePath) {
+    projectStatus.textContent = "Resolving this project's Windows path...";
+    const rootPath = await resolveProjectRootPath(project.name, project.files);
+    if (rootPath) {
+      project.projectRootPath = rootPath;
+      project.pathResolvePending = false;
+      cacheProjectRootPath(project.name, rootPath);
+      updateCopyCurrentPathButton();
+      filePath = currentLsFileWindowsPath();
+    }
+    if (!filePath) {
+      projectStatus.textContent = project?.pathResolvePending
+        ? "Robo Programmer is still resolving this project's Windows path. Try Copy Path again in a moment."
+        : "Robo Programmer could not resolve this project's full Windows path. Open it from its generated launcher, then reconnect the project folder if prompted.";
+      return;
+    }
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(filePath);
+  } else {
+    const textarea = document.createElement("textarea");
+    textarea.value = filePath;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error("Clipboard copy was blocked by the browser.");
+  }
+
+  projectStatus.textContent = `Copied path: ${filePath}`;
 }
 
 async function downloadRobotLsProgram(robotOrigin, remoteName) {
@@ -1909,6 +2071,8 @@ function closeProject() {
   activeAssignmentSheet = "";
   editor.value = "";
   splitEditor.value = "";
+  lastEditorValue = "";
+  lastSplitEditorValue = "";
   setSplitEditorOpen(false);
   currentFileNameEl.textContent = "No file selected";
   projectNameEl.textContent = "No project";
@@ -2718,8 +2882,9 @@ function addAssignmentCommentToCompletedReference(textarea, lsFile) {
   return true;
 }
 
-function restoreSourceTagDisplay(source, displayedContent) {
+function restoreSourceTagDisplay(source, displayedContent, previousDisplayedContent = "") {
   const sourceTags = new Map();
+  const previousDisplayedTags = new Map();
   const pattern = /\b(DI|DO|AI|AO|GI|GO|RI|RO|UI|UO|SI|SO|PR|SR|R|F|TIMER)\[(\d+)(?::([^\]\r\n]+))?\]/gi;
   let match;
 
@@ -2727,6 +2892,12 @@ function restoreSourceTagDisplay(source, displayedContent) {
     const key = assignmentKey(match[1], Number(match[2]));
     if (!sourceTags.has(key)) sourceTags.set(key, []);
     sourceTags.get(key).push(parseLsReferenceExtra(match[3] || ""));
+  }
+
+  while ((match = pattern.exec(previousDisplayedContent || "")) !== null) {
+    const key = assignmentKey(match[1], Number(match[2]));
+    if (!previousDisplayedTags.has(key)) previousDisplayedTags.set(key, []);
+    previousDisplayedTags.get(key).push(parseLsReferenceExtra(match[3] || ""));
   }
 
   const occurrence = new Map();
@@ -2737,13 +2908,19 @@ function restoreSourceTagDisplay(source, displayedContent) {
     const position = occurrence.get(key) || 0;
     occurrence.set(key, position + 1);
     const sourceTag = sourceTags.get(key)?.[position];
+    const previousTag = previousDisplayedTags.get(key)?.[position];
     if (!sourceTag) return fullMatch;
-    return formatLsReferenceParts(type, index, sourceTag.state, sourceTag.comment);
+    if (!previousTag) return formatLsReferenceParts(type, index, sourceTag.state, sourceTag.comment);
+
+    const displayedTag = parseLsReferenceExtra(rawExtra);
+    const state = displayedTag.state !== previousTag.state ? displayedTag.state : sourceTag.state;
+    const comment = displayedTag.comment !== previousTag.comment ? displayedTag.comment : sourceTag.comment;
+    return formatLsReferenceParts(type, index, state, comment);
   });
 }
 
-function mergeDisplayedContent(source, displayedContent, showHeader = headerVisible, showFooter = footerVisible) {
-  return restoreSourceTagDisplay(source, mergeVisibleContent(source, displayedContent, showHeader, showFooter));
+function mergeDisplayedContent(source, displayedContent, showHeader = headerVisible, showFooter = footerVisible, previousDisplayedContent = "") {
+  return restoreSourceTagDisplay(source, mergeVisibleContent(source, displayedContent, showHeader, showFooter), previousDisplayedContent);
 }
 
 function updateTagDisplayPreferenceAssignment(lsFile, key, description) {
@@ -2953,10 +3130,12 @@ async function syncDataAssignments() {
 
   if (getCurrentFile()) {
     editor.value = displayedFileContent(getCurrentFile());
+    lastEditorValue = editor.value;
     refreshEditor();
   }
   if (!splitEditorPane.hidden && getSplitFile()) {
     splitEditor.value = displayedFileContent(getSplitFile(), splitHeaderVisible, splitFooterVisible);
+    lastSplitEditorValue = splitEditor.value;
     renderSplitHighlight();
     updateSplitCursorStatus();
   }
@@ -3091,6 +3270,7 @@ function updateProjectActionVisibility() {
   pushAssignmentsMenuBtn.hidden = !projectOpen;
   syncAssignmentsMenuBtn.hidden = !projectOpen;
   closeProjectBtn.hidden = !projectOpen;
+  updateCopyCurrentPathButton();
 }
 
 function assignmentRangesForSheet(sheetName) {
@@ -5095,6 +5275,7 @@ function loadSplitFileIntoEditor() {
   splitEditorPrompt.hidden = true;
   splitEditor.readOnly = file.id === currentFileId;
   splitEditor.value = displayedFileContent(file, splitHeaderVisible, splitFooterVisible);
+  lastSplitEditorValue = splitEditor.value;
   renderSplitHighlight();
   updateSplitCursorStatus();
 }
@@ -5103,18 +5284,20 @@ function saveSplitBuffer() {
   const file = getSplitFile();
   if (!file || splitEditorPane.hidden) return;
   if (file.id === currentFileId) return;
-  file.content = mergeDisplayedContent(file.content, splitEditor.value, splitHeaderVisible, splitFooterVisible);
+  file.content = mergeDisplayedContent(file.content, splitEditor.value, splitHeaderVisible, splitFooterVisible, lastSplitEditorValue);
+  lastSplitEditorValue = splitEditor.value;
 }
 
 function markSplitFileDirty() {
   const file = getSplitFile();
   if (!file) return;
   if (file.id === currentFileId) return;
-  file.content = mergeDisplayedContent(file.content, splitEditor.value, splitHeaderVisible, splitFooterVisible);
+  file.content = mergeDisplayedContent(file.content, splitEditor.value, splitHeaderVisible, splitFooterVisible, lastSplitEditorValue);
   file.dirty = true;
   renderFileList();
   renderSplitFileSelect();
   scheduleSessionPersist();
+  lastSplitEditorValue = splitEditor.value;
 }
 
 function setSplitEditorOpen(open) {
@@ -5173,7 +5356,8 @@ function updateSplitFooterToggle() {
 function saveCurrentBuffer() {
   const currentFile = getCurrentFile();
   if (!currentFile) return;
-  currentFile.content = mergeDisplayedContent(currentFile.content, editor.value);
+  currentFile.content = mergeDisplayedContent(currentFile.content, editor.value, headerVisible, footerVisible, lastEditorValue);
+  lastEditorValue = editor.value;
 }
 
 function switchFile(fileId) {
@@ -5201,8 +5385,7 @@ function getCurrentFile() {
 function markCurrentFileDirty() {
   const file = getCurrentFile();
   if (!file) return;
-  lastEditorValue = editor.value;
-  file.content = mergeDisplayedContent(file.content, editor.value);
+  file.content = mergeDisplayedContent(file.content, editor.value, headerVisible, footerVisible, lastEditorValue);
   file.dirty = true;
   currentFileNameEl.textContent = `${file.name} *`;
   renderFileList();
@@ -6292,6 +6475,7 @@ function updateSaveCurrentLsButton() {
     ? `Save pending edits to ${file.name}`
     : "The active LS file has no pending edits";
   updateLoadLsFromRobotButton();
+  updateCopyCurrentPathButton();
 }
 
 async function saveActiveEditorFile() {
@@ -6418,6 +6602,8 @@ function showProjectMessage(message) {
 
 function clearEditorState(message = "No checks run yet.") {
   editor.value = "";
+  lastEditorValue = "";
+  updateCopyCurrentPathButton();
   renderHighlight();
   updateCursorStatus();
   diagnosticsEl.className = "diagnostics empty";
@@ -6431,6 +6617,7 @@ function setMainEditorEmptyState(message) {
   mainEditorPrompt.hidden = false;
   footerToggleBar.hidden = true;
   resetEditorHistory();
+  updateCopyCurrentPathButton();
 }
 
 function refreshEditor() {
@@ -8189,11 +8376,13 @@ document.querySelector("#sampleBtn")?.addEventListener("click", () => {
     file.content = sampleProgram;
     file.dirty = true;
     editor.value = displayedFileContent(file);
+    lastEditorValue = editor.value;
     currentFileNameEl.textContent = `${file.name} *`;
     renderFileList();
     persistSession();
   } else {
     editor.value = getVisibleContent(sampleProgram);
+    lastEditorValue = editor.value;
   }
   refreshEditor();
 });
@@ -8567,6 +8756,12 @@ saveCurrentLsBtn.addEventListener("click", () => {
   saveActiveEditorFile().catch((error) => {
     projectStatus.textContent = `Unable to save the active LS file: ${error.message}`;
     updateSaveCurrentLsButton();
+  });
+});
+
+copyCurrentPathBtn.addEventListener("click", () => {
+  copyCurrentLsPath().catch((error) => {
+    projectStatus.textContent = `Unable to copy LS file path: ${error.message}`;
   });
 });
 
@@ -9002,6 +9197,8 @@ function showInitialStartScreen() {
   activeWorkspaceView = "editor";
   editor.value = "";
   splitEditor.value = "";
+  lastEditorValue = "";
+  lastSplitEditorValue = "";
   currentFileNameEl.textContent = "No file selected";
   projectNameEl.textContent = "No project";
   projectStatus.textContent = "Open or create a robot project to begin.";

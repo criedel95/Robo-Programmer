@@ -2149,9 +2149,14 @@ body.resizing .resize-handle::before {
 }
 
 #currentFileName {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.copy-path-button {
+  flex-shrink: 0;
 }
 
 #splitFileSelect {
