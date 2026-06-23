@@ -21,7 +21,7 @@ Key capabilities include:
 - Project-wide reference search and conflict-checked tag reassignment
 - Program mapping and assignment workbook integration
 - Portable `.ROBO` project import and export
-- Local browser and Electron desktop operation
+- Local browser operation
 - Robot backup, comparison, and live robot workflows
 
 ## Run locally
