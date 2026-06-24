@@ -536,7 +536,7 @@ Robot Export
 ------------
 Open a project and choose Robot Export from the workspace buttons at the top of Robo Programmer.
 
-Robot Export sends selected LS programs to a live robot using the robot's FTP server. The FANUC ASCII Program Loader option compiles each accepted LS file into a TP program.
+Robot Export sends selected LS programs to a live robot using the robot's FTP server. The FANUC ASCII Program Loader option compiles each accepted LS file into a TP program. The same program list can also import selected robot programs into the current project's LS Files folder.
 
 Required robot options:
 
@@ -551,12 +551,21 @@ Robot Export workflow:
 
   1. Enter the robot IP address or hostname. The same address used by Robot Comments can be used.
   2. Choose Check Connection. Robo Programmer separately checks FTP Interface and ASCII Program Loader, displays whether each requirement is available, and only enables exporting when both checks pass.
-  3. Review the program list. Existing LS or TP programs are marked as overwrite risks.
+  3. Review the program list. Existing LS or TP programs are marked as overwrite risks. Robot programs that are available online but missing from the current project are marked as available on the robot but not in the project.
   4. To replace an existing robot program, enable Allow overwriting existing robot programs. Existing programs remain locked and cannot be selected until this option is enabled.
   5. Select only the LS programs that should be exported or replaced.
   6. Choose Export Selected Programs and carefully review the final confirmation. Programs that will be replaced are listed separately.
   7. Wait for verification. Robo Programmer checks that the LS file and compiled TP program appear on the robot.
   8. Review and test the resulting TP program safely before production use.
+
+Robot Import workflow:
+
+  1. Go Online and choose Check Connection.
+  2. Select project programs that should be replaced from the robot, or robot-only programs that should be added to the project.
+  3. Choose Import Selected Programs and review the confirmation.
+  4. Existing project LS files are archived in LS Files\Trash before replacement.
+  5. Robot-only programs are downloaded as LS files and added to the project's LS Files folder.
+  6. Imported files appear in the LS Editor project file list.
 
 Robot Export safety behavior:
 

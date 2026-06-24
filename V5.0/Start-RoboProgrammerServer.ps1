@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 23
+$serverApiVersion = 24
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -225,6 +225,23 @@ function Get-RobotFtpFile {
   }
 }
 
+function Get-RobotLsSourceBytes {
+  param(
+    [string]$HttpOrigin,
+    [string]$ProgramName
+  )
+
+  if ($ProgramName -notmatch "^[A-Z][A-Z0-9_]{0,35}$") {
+    throw "Robot LS source requested an invalid program name: $ProgramName"
+  }
+  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/$ProgramName.LS"
+  if ($text -notmatch "(?im)^\s*/PROG\s+$([regex]::Escape($ProgramName))\s*$" -or $text -notmatch "(?im)^\s*/END\s*$") {
+    throw "The robot did not return complete LS source for $ProgramName."
+  }
+  if (-not $text.EndsWith("`n")) { $text += "`n" }
+  return [System.Text.Encoding]::UTF8.GetBytes($text)
+}
+
 function New-RobotBackupZip {
   param(
     [string]$HostName,
@@ -308,7 +325,15 @@ function Handle-RobotBackupRequest {
       if ($name -notmatch "^[A-Z0-9_.-]+$") {
         throw "Robot backup requested an unsafe filename: $name"
       }
-      Send-Response $Stream 200 "OK" (Get-RobotFtpFile $connection.FtpHost $name) "application/octet-stream"
+      try {
+        Send-Response $Stream 200 "OK" (Get-RobotFtpFile $connection.FtpHost $name) "application/octet-stream"
+      } catch {
+        if ($name -match "^([A-Z][A-Z0-9_]{0,35})\.LS$") {
+          Send-Response $Stream 200 "OK" (Get-RobotLsSourceBytes $connection.HttpOrigin $Matches[1]) "application/octet-stream"
+        } else {
+          throw
+        }
+      }
       return
     }
 

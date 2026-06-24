@@ -433,6 +433,7 @@ let robotCommentComparison = [];
 let robotCommentTypeFilterValue = "all";
 let robotCommentDifferenceFilterValue = "all";
 let robotExportPrograms = [];
+let robotExportRemoteFiles = [];
 let robotExportConnected = false;
 let robotBackupInventory = [];
 let robotBackupConnected = false;
@@ -1732,6 +1733,29 @@ async function archiveAndReplaceProjectLs(file, robotContent, archiveDate = new 
   return trashFileName;
 }
 
+async function createProjectLsFromRobot(remoteName, robotContent) {
+  const fileName = normalizeLsFileName(remoteName);
+  if (!fileName) throw new Error(`Invalid robot LS filename: ${remoteName}`);
+  if (project.files.some((file) => file.name.toUpperCase() === fileName)) {
+    throw new Error(`${fileName} already exists in this project. Refresh the project file list and try again.`);
+  }
+
+  const handle = await writeTextFile(project.lsDirectoryHandle, fileName, robotContent);
+  const file = {
+    id: fileName,
+    name: fileName,
+    content: robotContent,
+    savedContent: robotContent,
+    handle,
+    favorite: false,
+    dirty: false
+  };
+  project.files.push(file);
+  sortFiles(project.files);
+  tagDisplayPreferences.delete(file.id);
+  return file;
+}
+
 function refreshAfterRobotLsImports(importedFileIds) {
   dismissedDiagnosticKeys = new Set();
   if (importedFileIds.has(currentFileId)) {
@@ -2059,6 +2083,7 @@ function closeProject() {
   robotCommentComparison = [];
   robotExportConnected = false;
   robotExportPrograms = [];
+  robotExportRemoteFiles = [];
   robotExportAutoCheckedAddress = "";
   robotBackupInventory = [];
   robotBackupConnected = false;
@@ -3869,6 +3894,11 @@ function robotExportProgramName(file) {
   return match ? match[1].toUpperCase() : "";
 }
 
+function robotExportProgramNameFromRemoteFile(fileName) {
+  const match = String(fileName || "").toUpperCase().match(/^([A-Z][A-Z0-9_]{0,35})\.(LS|TP)$/);
+  return match ? match[1] : "";
+}
+
 function robotExportStringList(value) {
   if (Array.isArray(value)) return value.filter(Boolean).map(String);
   return value ? [String(value)] : [];
@@ -4011,6 +4041,7 @@ function goOffline() {
   robotOnlineChecking = false;
   robotExportAutoCheckedAddress = "";
   robotExportConnected = false;
+  robotExportRemoteFiles = [];
   robotBackupConnected = false;
   robotBackupInventory = [];
   robotBackupTableWrap.innerHTML = "";
@@ -4085,6 +4116,7 @@ async function runRobotExportAutoCheck({ force = false } = {}) {
     await checkRobotExportConnection({ automatic: true });
   } catch (error) {
     robotExportConnected = false;
+    robotExportRemoteFiles = [];
     renderRobotExportRequirements({
       ftpInterface: { available: false, message: error.message },
       asciiProgramLoader: { available: false, message: error.message }
@@ -4097,16 +4129,18 @@ async function runRobotExportAutoCheck({ force = false } = {}) {
 function updateRobotExportButtons() {
   const selectable = robotExportPrograms.filter((item) => item.valid);
   const selected = selectable.filter((item) => item.selected);
+  const exportableSelected = selected.filter((item) => item.canExport);
+  const importableSelected = selected.filter((item) => item.canImport);
   const robotOnline = robotOnlineStatus === "online";
   setRobotOnlineActionState(selectAllRobotExportBtn, !robotOnline || !robotExportConnected || selectable.length === 0);
   setRobotOnlineActionState(clearRobotExportBtn, !robotOnline || selected.length === 0);
-  setRobotOnlineActionState(exportSelectedProgramsBtn, !robotOnline || robotLsLoadActive || !robotExportConnected || selected.length === 0);
+  setRobotOnlineActionState(exportSelectedProgramsBtn, !robotOnline || robotLsLoadActive || !robotExportConnected || exportableSelected.length === 0);
   setRobotOnlineActionState(
     importSelectedProgramsBtn,
-    !robotOnline || robotLsLoadActive || !robotExportConnected || selected.length === 0,
-    "Download the selected LS programs from the online robot, archive each current project copy in Trash, and replace it with the robot version."
+    !robotOnline || robotLsLoadActive || !robotExportConnected || importableSelected.length === 0,
+    "Download the selected LS programs from the online robot, create missing project files, and archive each replaced project copy in Trash."
   );
-  robotExportSummary.textContent = `${selected.length} selected of ${selectable.length} available LS program${selectable.length === 1 ? "" : "s"}.`;
+  robotExportSummary.textContent = `${selected.length} selected of ${selectable.length} available program${selectable.length === 1 ? "" : "s"} (${exportableSelected.length} exportable, ${importableSelected.length} importable).`;
 }
 
 function renderRobotExportRequirements(requirements = null) {
@@ -4164,52 +4198,97 @@ function setLiveRobotOverviewInstructionsOpen(open) {
 function renderRobotExportPrograms(remoteFiles = null) {
   if (!project) {
     robotExportPrograms = [];
+    robotExportRemoteFiles = [];
     robotExportTableWrap.innerHTML = "";
     updateRobotExportButtons();
     return;
   }
   saveCurrentBuffer();
   saveSplitBuffer();
-  const existingSelection = new Map(robotExportPrograms.map((item) => [item.fileId, item.selected]));
-  const existingResults = new Map(robotExportPrograms.map((item) => [item.fileId, item.result]));
-  const existingErrorLocations = new Map(robotExportPrograms.map((item) => [item.fileId, item.errorLocation]));
-  const remoteSet = remoteFiles ? new Set(remoteFiles.map((name) => String(name).toUpperCase())) : null;
-  robotExportPrograms = project.files.map((file) => {
+  if (remoteFiles) robotExportRemoteFiles = remoteFiles.map((name) => String(name).toUpperCase());
+  const inventoryFiles = remoteFiles ? robotExportRemoteFiles : robotExportRemoteFiles;
+  const existingSelection = new Map(robotExportPrograms.map((item) => [item.key || item.fileId, item.selected]));
+  const existingResults = new Map(robotExportPrograms.map((item) => [item.key || item.fileId, item.result]));
+  const existingErrorLocations = new Map(robotExportPrograms.map((item) => [item.key || item.fileId, item.errorLocation]));
+  const remoteSet = inventoryFiles.length ? new Set(inventoryFiles) : null;
+  const remotePrograms = new Map();
+  inventoryFiles.forEach((name) => {
+    const remoteName = String(name || "").toUpperCase();
+    const programName = robotExportProgramNameFromRemoteFile(remoteName);
+    if (!programName) return;
+    const entry = remotePrograms.get(programName) || { programName, remoteLs: false, remoteTp: false };
+    if (remoteName.endsWith(".LS")) entry.remoteLs = true;
+    if (remoteName.endsWith(".TP")) entry.remoteTp = true;
+    remotePrograms.set(programName, entry);
+  });
+  const projectProgramNames = new Set();
+  const projectRows = project.files.map((file) => {
     const programName = robotExportProgramName(file);
     const valid = Boolean(programName) && programName.length <= 36;
+    if (valid) projectProgramNames.add(programName);
     const remoteLs = valid && remoteSet?.has(`${programName}.LS`);
     const remoteTp = valid && remoteSet?.has(`${programName}.TP`);
+    const key = `project:${file.id}`;
     return {
+      key,
       fileId: file.id,
       file,
       programName,
       remoteName: valid ? `${programName}.LS` : "",
       valid,
+      canExport: valid,
+      canImport: valid && Boolean(remoteLs || remoteTp),
+      projectMissing: false,
       remoteLs: Boolean(remoteLs),
       remoteTp: Boolean(remoteTp),
-      selected: valid && Boolean(existingSelection.get(file.id)),
-      result: existingResults.get(file.id) || "",
-      errorLocation: existingErrorLocations.get(file.id) || null
+      selected: valid && Boolean(existingSelection.get(key)),
+      result: existingResults.get(key) || "",
+      errorLocation: existingErrorLocations.get(key) || null
     };
   });
+  const remoteOnlyRows = [...remotePrograms.values()]
+    .filter((item) => !projectProgramNames.has(item.programName))
+    .sort((a, b) => a.programName.localeCompare(b.programName, undefined, { numeric: true, sensitivity: "base" }))
+    .map((item) => {
+      const key = `robot:${item.programName}`;
+      return {
+        key,
+        fileId: "",
+        file: null,
+        programName: item.programName,
+        remoteName: `${item.programName}.LS`,
+        valid: true,
+        canExport: false,
+        canImport: Boolean(item.remoteLs || item.remoteTp),
+        projectMissing: true,
+        remoteLs: Boolean(item.remoteLs),
+        remoteTp: Boolean(item.remoteTp),
+        selected: Boolean(existingSelection.get(key)),
+        result: existingResults.get(key) || "",
+        errorLocation: existingErrorLocations.get(key) || null
+      };
+    });
+  robotExportPrograms = [...projectRows, ...remoteOnlyRows];
 
   robotExportTableWrap.innerHTML = robotExportPrograms.length ? `
     <table class="robot-comments-table">
-      <thead><tr><th>Export</th><th>Project File</th><th>Robot Program</th><th>Robot Status</th><th>Result</th></tr></thead>
+      <thead><tr><th>Select</th><th>Project File</th><th>Robot Program</th><th>Robot Status</th><th>Result</th></tr></thead>
       <tbody>
         ${robotExportPrograms.map((item, index) => {
           const exists = item.remoteLs || item.remoteTp;
           const robotStatus = !item.valid
             ? "Invalid or missing /PROG name"
-            : exists
+            : item.projectMissing
+              ? `Available on robot, not in project${item.remoteLs ? " LS" : ""}${item.remoteTp ? " TP" : ""}`
+              : exists
               ? `Exists${item.remoteLs ? " LS" : ""}${item.remoteTp ? " TP" : ""} - will be replaced`
               : robotExportConnected ? "New program" : "Connection not checked";
           return `
             <tr>
-              <td><input type="checkbox" data-robot-export-index="${index}" ${item.selected ? "checked" : ""} ${!item.valid || !robotExportConnected ? "disabled" : ""} aria-label="Export ${escapeHtml(item.file.name)}"></td>
-              <td>${escapeHtml(item.file.name)}${item.file.dirty ? " *" : ""}</td>
+              <td><input type="checkbox" data-robot-export-index="${index}" ${item.selected ? "checked" : ""} ${!item.valid || !robotExportConnected ? "disabled" : ""} aria-label="Select ${escapeHtml(item.programName || item.file?.name || "program")}"></td>
+              <td>${item.file ? `${escapeHtml(item.file.name)}${item.file.dirty ? " *" : ""}` : `<span class="muted-position">Not in project</span>`}</td>
               <td>${escapeHtml(item.programName || "(invalid)")}</td>
-              <td class="${item.remoteLs || item.remoteTp ? "robot-export-overwrite" : ""}">${escapeHtml(robotStatus)}</td>
+              <td class="${item.projectMissing ? "robot-export-success" : item.remoteLs || item.remoteTp ? "robot-export-overwrite" : ""}">${escapeHtml(robotStatus)}</td>
               <td class="${item.result?.startsWith("Success") ? "robot-export-success" : item.result ? "robot-export-failure" : ""}">
                 <div>${escapeHtml(item.result || "")}</div>
                 ${item.errorLocation ? `<button class="robot-export-go-to-error" type="button" data-robot-export-error-index="${index}">Go to Error (Ln ${item.errorLocation.line}, Col ${item.errorLocation.column})</button>` : ""}
@@ -4248,7 +4327,7 @@ async function checkRobotExportConnection({ automatic = false } = {}) {
 async function exportSelectedPrograms() {
   saveCurrentBuffer();
   saveSplitBuffer();
-  const selected = robotExportPrograms.filter((item) => item.selected && item.valid);
+  const selected = robotExportPrograms.filter((item) => item.selected && item.valid && item.canExport);
   if (!selected.length) return;
   const overwrite = selected.filter((item) => item.remoteLs || item.remoteTp);
   const robotOrigin = requireOnlineRobot("export programs");
@@ -4307,7 +4386,7 @@ async function exportSelectedPrograms() {
 }
 
 async function importSelectedPrograms() {
-  const selected = robotExportPrograms.filter((item) => item.selected && item.valid);
+  const selected = robotExportPrograms.filter((item) => item.selected && item.valid && item.canImport);
   if (!selected.length) return;
   if (!project?.lsDirectoryHandle?.getDirectoryHandle) {
     throw new Error("Reconnect the project folder before importing so each current LS file can be archived in Trash.");
@@ -4315,10 +4394,14 @@ async function importSelectedPrograms() {
 
   const robotOrigin = requireOnlineRobot("import programs");
   const selectedNames = selected.map((item) => item.remoteName).join(", ");
+  const newPrograms = selected.filter((item) => item.projectMissing);
+  const replacements = selected.filter((item) => item.file);
   const shouldImport = confirm(
     `Import ${selected.length} selected LS program${selected.length === 1 ? "" : "s"} from ${robotOnlineAddress}?\n\n`
     + `${selectedNames}\n\n`
-    + `Each current project version, including unsaved editor changes, will first be archived in Trash with a timestamp. The selected project files will then be overwritten with the robot versions. Continue?`
+    + `${replacements.length ? "Existing project copies will first be archived in Trash with a timestamp. " : ""}`
+    + `${newPrograms.length ? "Robot-only programs will be added as new LS files in the project. " : ""}`
+    + "Continue?"
   );
   if (!shouldImport) {
     robotExportStatus.textContent = "Robot program import cancelled.";
@@ -4335,7 +4418,10 @@ async function importSelectedPrograms() {
     robotExportStatus.textContent = `Checking ${selected.length} selected LS program${selected.length === 1 ? "" : "s"} on ${robotOnlineAddress}...`;
     const inventory = await callRobotExportApi("/robot-backup/inventory", { robotAddress: robotOrigin });
     const availableFiles = new Set((inventory.files || []).map((name) => String(name).toUpperCase()));
-    const missing = selected.filter((item) => !availableFiles.has(item.remoteName.toUpperCase()));
+    const missing = selected.filter((item) => (
+      !availableFiles.has(item.remoteName.toUpperCase())
+      && !availableFiles.has(`${item.programName}.TP`)
+    ));
     if (missing.length) {
       throw new Error(`Import cancelled before any project files were changed. Missing robot LS file${missing.length === 1 ? "" : "s"}: ${missing.map((item) => item.remoteName).join(", ")}.`);
     }
@@ -4349,19 +4435,34 @@ async function importSelectedPrograms() {
 
     const importedFileIds = new Set();
     const archiveDate = new Date();
+    const addedFiles = [];
+    const replacedFiles = [];
     for (let index = 0; index < downloads.length; index += 1) {
       const { item, content } = downloads[index];
-      robotExportStatus.textContent = `Replacing ${index + 1} of ${downloads.length}: ${item.file.name}...`;
-      const trashFileName = await archiveAndReplaceProjectLs(item.file, content, archiveDate);
-      importedFileIds.add(item.fileId);
-      item.result = `Success: Imported ${item.remoteName}; previous project copy archived as Trash\\${trashFileName}`;
+      if (item.file) {
+        robotExportStatus.textContent = `Replacing ${index + 1} of ${downloads.length}: ${item.file.name}...`;
+        const trashFileName = await archiveAndReplaceProjectLs(item.file, content, archiveDate);
+        importedFileIds.add(item.fileId);
+        replacedFiles.push(item.remoteName);
+        item.result = `Success: Imported ${item.remoteName}; previous project copy archived as Trash\\${trashFileName}`;
+      } else {
+        robotExportStatus.textContent = `Adding ${index + 1} of ${downloads.length}: ${item.remoteName}...`;
+        const newFile = await createProjectLsFromRobot(item.remoteName, content);
+        importedFileIds.add(newFile.id);
+        addedFiles.push(newFile.name);
+        item.fileId = newFile.id;
+        item.file = newFile;
+        item.projectMissing = false;
+        item.canExport = true;
+        item.result = `Success: Imported ${item.remoteName}; added new project file ${newFile.name}`;
+      }
       item.errorLocation = null;
       item.selected = false;
     }
 
     refreshAfterRobotLsImports(importedFileIds);
     renderRobotExportPrograms(inventory.files || []);
-    robotExportStatus.textContent = `Imported ${downloads.length} LS program${downloads.length === 1 ? "" : "s"} from ${robotOnlineAddress}. Every previous project copy was archived in Trash.`;
+    robotExportStatus.textContent = `Imported ${downloads.length} LS program${downloads.length === 1 ? "" : "s"} from ${robotOnlineAddress}. ${addedFiles.length ? `Added ${addedFiles.length}: ${addedFiles.join(", ")}. ` : ""}${replacedFiles.length ? `Replaced ${replacedFiles.length}; previous project copies were archived in Trash.` : ""}`;
   } finally {
     robotLsLoadActive = false;
     setRobotOnlineActionState(checkRobotExportBtn, robotOnlineStatus !== "online");
@@ -8241,6 +8342,7 @@ checkRobotExportBtn.addEventListener("click", () => {
   }
   checkRobotExportConnection().catch((error) => {
     robotExportConnected = false;
+    robotExportRemoteFiles = [];
     renderRobotExportRequirements({
       ftpInterface: { available: false, message: error.message },
       asciiProgramLoader: { available: false, message: error.message }
@@ -9263,6 +9365,7 @@ function showInitialStartScreen() {
   robotPositionAddressInput.value = "";
   robotExportConnected = false;
   robotExportPrograms = [];
+  robotExportRemoteFiles = [];
   robotExportAutoCheckedAddress = "";
   robotBackupConnected = false;
   robotBackupInventory = [];
@@ -9309,4 +9412,3 @@ async function initializeAppSession() {
 }
 
 initializeAppSession();
-
