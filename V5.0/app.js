@@ -3211,6 +3211,7 @@ function refreshEditorAfterAssignmentChange(textarea, lsFile, showHeader, showFo
     lastEditorValue = textarea.value;
     refreshEditor();
   } else {
+    lastSplitEditorValue = textarea.value;
     renderSplitHighlight();
     updateSplitCursorStatus();
   }
@@ -6350,6 +6351,13 @@ function insertInstruction(instruction) {
   renumberTextAreaLines(state.textarea);
   wrapLongBangCommentLinesFor(state.textarea);
   state.markDirty();
+  refreshEditorAfterAssignmentChange(
+    state.textarea,
+    state.file,
+    state.name === "split" ? splitHeaderVisible : headerVisible,
+    state.name === "split" ? splitFooterVisible : footerVisible,
+    state.name === "main"
+  );
   state.renderHighlight();
   renderDiagnostics();
   state.updateCursorStatus();
@@ -6717,6 +6725,8 @@ function lintProgram(source) {
   const required = ["PROG", "ATTR", "MN", "POS", "END"];
   const validMnLinePattern = /^\s*(?:\d+|):\s*/;
   const motionReferencePattern = /^\s*\d+:\s*[JLCP]\s+(?:P|PR)\[(?:\d+|R\[\d+(?::[^\]]+)?\])(?::[^\]]+)?\]/i;
+  const motionTargetPattern = "(?:P|PR)\\[(?:\\d+|R\\[\\d+(?::[^\\]]+)?\\])(?::[^\\]]+)?\\]";
+  const jointMotionPattern = new RegExp(`^J\\s+${motionTargetPattern}\\s+(\\S+)`, "i");
 
   required.forEach((section) => {
     if (!analysis.sections[section]) {
@@ -6820,14 +6830,27 @@ function lintProgram(source) {
       }
 
       if (!isRemarked) {
-        if (/\b(?:FINE|CNT\d+)\s+TOOL_OFFSET\s+PR\[/i.test(logic)) {
+        if (/\b(?:FINE|CNT\d+)\s+(?:TOOL_)?OFFSET\s+PR\[/i.test(logic)) {
           diagnostics.push({
             severity: "error",
             line: lineNo,
-            title: "Missing TOOL_OFFSET comma",
-            message: "TOOL_OFFSET requires a comma before its position register.",
-            fix: { kind: "add-tool-offset-comma", line: lineNo },
-            suggestion: "Change TOOL_OFFSET PR[...] to TOOL_OFFSET,PR[...]."
+            title: "Missing offset comma",
+            message: "OFFSET and TOOL_OFFSET require a comma before their position register.",
+            fix: { kind: "add-offset-comma", line: lineNo },
+            suggestion: "Change OFFSET PR[...] to OFFSET,PR[...] or TOOL_OFFSET PR[...] to TOOL_OFFSET,PR[...]."
+          });
+        }
+
+        const jointMotionMatch = logic.match(jointMotionPattern);
+        if (jointMotionMatch && !/%$/.test(jointMotionMatch[1])) {
+          const numericJointSpeed = /^\d+(?:\.\d+)?$/.test(jointMotionMatch[1]);
+          diagnostics.push({
+            severity: "error",
+            line: lineNo,
+            title: numericJointSpeed ? "Joint speed missing %" : "Invalid joint speed unit",
+            message: "Joint motion speed must be a percent value, such as 100%.",
+            fix: numericJointSpeed ? { kind: "add-joint-speed-percent", line: lineNo } : null,
+            suggestion: numericJointSpeed ? `Change ${jointMotionMatch[1]} to ${jointMotionMatch[1]}%.` : "Use a percent speed for J motion."
           });
         }
 
@@ -7317,10 +7340,20 @@ function addLineSemicolon(source, lineNumber) {
   return lines.join("\n");
 }
 
-function addToolOffsetComma(source, lineNumber) {
+function addOffsetComma(source, lineNumber) {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const index = lineNumber - 1;
-  lines[index] = (lines[index] || "").replace(/\b(TOOL_OFFSET)\s+(?=PR\[)/i, "$1,");
+  lines[index] = (lines[index] || "").replace(/\b((?:TOOL_)?OFFSET)\s+(?=PR\[)/i, "$1,");
+  return lines.join("\n");
+}
+
+function addJointSpeedPercent(source, lineNumber) {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const index = lineNumber - 1;
+  const line = lines[index] || "";
+  const targetPattern = "((?:P|PR)\\[(?:\\d+|R\\[\\d+(?::[^\\]]+)?\\])(?::[^\\]]+)?\\])";
+  const jointSpeedPattern = new RegExp(`^(\\s*(?:\\d+|):\\s*J\\s+${targetPattern}\\s+)(\\d+(?:\\.\\d+)?)(\\s+)`, "i");
+  lines[index] = line.replace(jointSpeedPattern, "$1$3%$4");
   return lines.join("\n");
 }
 
@@ -7382,7 +7415,8 @@ function calculateDiagnosticFix(before, fix) {
   if (fix.kind === "format-mn-line") next = formatMnLine(before, fix.line);
   if (fix.kind === "add-semicolon") next = addLineSemicolon(before, fix.line);
   if (fix.kind === "add-motion-termination") next = addMotionTermination(before, fix.line);
-  if (fix.kind === "add-tool-offset-comma") next = addToolOffsetComma(before, fix.line);
+  if (fix.kind === "add-tool-offset-comma" || fix.kind === "add-offset-comma") next = addOffsetComma(before, fix.line);
+  if (fix.kind === "add-joint-speed-percent") next = addJointSpeedPercent(before, fix.line);
   if (fix.kind === "rename-duplicate-label") next = renameDuplicateLabel(before, fix.line, fix.id);
   if (fix.kind === "add-position") next = addPlaceholderPosition(before, fix.id);
   return next;
@@ -7477,11 +7511,13 @@ function renderDiagnostics() {
       </div>
       <div>${escapeHtml(item.message)}</div>
       ${item.suggestion ? `<div class="diagnostic-suggestion">Suggested fix: ${escapeHtml(item.suggestion)}</div>` : ""}
-      <div class="diagnostic-actions">
-        <button type="button" class="diagnostic-jump" data-line="${item.line}">Go To</button>
-        ${item.fix ? `<button type="button" class="diagnostic-fix" data-fix-index="${index}">Review Fix</button>` : ""}
-        ${item.title !== "No issues found" ? `<button type="button" class="diagnostic-dismiss" data-dismiss-index="${index}">Dismiss</button>` : ""}
-      </div>
+      ${item.title !== "No issues found" ? `
+        <div class="diagnostic-actions">
+          <button type="button" class="diagnostic-jump" data-line="${item.line}">Go To</button>
+          ${item.fix ? `<button type="button" class="diagnostic-fix" data-fix-index="${index}">Review Fix</button>` : ""}
+          <button type="button" class="diagnostic-dismiss" data-dismiss-index="${index}">Dismiss</button>
+        </div>
+      ` : ""}
     </article>
   `).join("") : `
     <article class="diagnostic info" tabindex="0">
