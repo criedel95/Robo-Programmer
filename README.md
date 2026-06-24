@@ -9,7 +9,7 @@ FTP Interface (R796)
 
 ASCII Program Loader (J716)
 
-> This repository is private and under active development. The current maintained source is **V5.0**.
+> This repository is under active development. The current maintained source is **V5.0**.  I may push edits while still keeping V5.0 as the major release.  
 
 ## Current version
 
