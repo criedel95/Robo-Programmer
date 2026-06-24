@@ -7190,6 +7190,19 @@ function previewTextAroundLine(source, lineNumber, radius = 2) {
   return lines.slice(start, end).map((line, index) => `${String(start + index + 1).padStart(4, " ")} | ${line}`).join("\n");
 }
 
+function previewHtmlAroundLine(source, lineNumber, className, radius = 2) {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const center = Math.max(0, Math.min(lines.length - 1, Number(lineNumber || 1) - 1));
+  const start = Math.max(0, center - radius);
+  const end = Math.min(lines.length, center + radius + 1);
+  return lines.slice(start, end).map((line, index) => {
+    const sourceLine = start + index + 1;
+    const changed = sourceLine === Number(lineNumber);
+    const text = `${String(sourceLine).padStart(4, " ")} | ${line}`;
+    return `<span class="${className}${changed ? " changed" : ""}">${escapeHtml(text)}</span>`;
+  }).join("");
+}
+
 function closeChangePreview() {
   pendingChangePreview = null;
   changePreviewModal.hidden = true;
@@ -7567,11 +7580,11 @@ function reviewDiagnosticFix(item) {
     details: `
       <div class="change-preview-block">
         <strong>Before</strong>
-        <pre class="change-preview-code"><span class="removed">${escapeHtml(previewTextAroundLine(before, line))}</span></pre>
+        <pre class="change-preview-code">${previewHtmlAroundLine(before, line, "removed")}</pre>
       </div>
       <div class="change-preview-block">
         <strong>After</strong>
-        <pre class="change-preview-code"><span class="added">${escapeHtml(previewTextAroundLine(next, line))}</span></pre>
+        <pre class="change-preview-code">${previewHtmlAroundLine(next, line, "added")}</pre>
       </div>
     `,
     onApply: () => applyDiagnosticFix(item.fix, next)

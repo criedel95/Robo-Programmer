@@ -2951,12 +2951,29 @@ body.resizing .resize-handle::before {
   white-space: pre-wrap;
 }
 
+.change-preview-code span {
+  border-radius: 4px;
+  display: block;
+  line-height: inherit;
+  padding: 1px 6px;
+}
+
 .change-preview-code .removed {
   color: var(--error);
 }
 
 .change-preview-code .added {
   color: var(--accent);
+}
+
+.change-preview-code .changed {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.change-preview-code .removed.changed {
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  box-shadow: inset 3px 0 0 var(--error);
 }
 
 .suggestions {
