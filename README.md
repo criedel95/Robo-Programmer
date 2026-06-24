@@ -33,8 +33,6 @@ Robo Programmer V5.0.cmd
 ```
 
 
-Generated installers are written to `Build Exports` and are intentionally excluded from source control.
-
 ## Repository layout
 
 ```text
