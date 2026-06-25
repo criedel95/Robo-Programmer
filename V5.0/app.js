@@ -374,6 +374,8 @@ const teachPendantCompletions = [
   ["IF AI[]=0,JMP LBL[] ;", "Analog input condition"],
   ["R[]=0 ;", "R register assign"],
   ["R[]=R[]+1 ;", "R register math"],
+  ["F[]=(ON) ;", "Flag On"],
+  ["F[]=(OFF) ;", "Flag Off"],
   ["PR[]=P[] ;", "PR assign"],
   ["PR[,X]=0 ;", "PR element"],
   ["IF  THEN ;", "IF / THEN block"],
@@ -6827,7 +6829,7 @@ function lintProgram(source) {
   const validMnLinePattern = /^\s*(?:\d+|):\s*/;
   const motionReferencePattern = /^\s*\d+:\s*[JLCP]\s+(?:P|PR)\[(?:\d+|R\[\d+(?::[^\]]+)?\])(?::[^\]]+)?\]/i;
   const motionTargetPattern = "(?:P|PR)\\[(?:\\d+|R\\[\\d+(?::[^\\]]+)?\\])(?::[^\\]]+)?\\]";
-  const jointMotionPattern = new RegExp(`^J\\s+${motionTargetPattern}\\s+(\\S+)`, "i");
+  const jointMotionPattern = new RegExp(`^J\\s+${motionTargetPattern}\\s+((?:R\\[\\d+(?::[^\\]]+)?\\]|\\d+(?:\\.\\d+)?)(?:%)?|\\S+)`, "i");
 
   required.forEach((section) => {
     if (!analysis.sections[section]) {
@@ -6917,6 +6919,18 @@ function lintProgram(source) {
       }
 
       if (validMnLinePattern.test(line)
+        && validContinuationParent
+        && /;\S+/.test(line.trim())
+        && !hasFollowingTpContinuationLine(analysis.lines, index)) {
+        diagnostics.push({
+          severity: "error",
+          line: lineNo,
+          title: "Extra text after semicolon",
+          message: "TP instruction text after a semicolon is invalid.",
+          fix: { kind: "trim-after-semicolon", line: lineNo },
+          suggestion: "Remove everything after the first instruction semicolon."
+        });
+      } else if (validMnLinePattern.test(line)
         && validContinuationParent
         && !/;\s*$/.test(line.trim())
         && !hasFollowingTpContinuationLine(analysis.lines, index)) {
@@ -7454,6 +7468,17 @@ function addLineSemicolon(source, lineNumber) {
   return lines.join("\n");
 }
 
+function trimAfterSemicolon(source, lineNumber) {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const index = lineNumber - 1;
+  const line = lines[index] || "";
+  const semicolonIndex = line.indexOf(";");
+  if (semicolonIndex >= 0) {
+    lines[index] = `${line.slice(0, semicolonIndex).replace(/\s+$/, "")} ;`;
+  }
+  return lines.join("\n");
+}
+
 function addOffsetComma(source, lineNumber) {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const index = lineNumber - 1;
@@ -7528,6 +7553,7 @@ function calculateDiagnosticFix(before, fix) {
   if (fix.kind === "missing-program-name") next = insertMissingSection(before, "PROG");
   if (fix.kind === "format-mn-line") next = formatMnLine(before, fix.line);
   if (fix.kind === "add-semicolon") next = addLineSemicolon(before, fix.line);
+  if (fix.kind === "trim-after-semicolon") next = trimAfterSemicolon(before, fix.line);
   if (fix.kind === "add-motion-termination") next = addMotionTermination(before, fix.line);
   if (fix.kind === "add-tool-offset-comma" || fix.kind === "add-offset-comma") next = addOffsetComma(before, fix.line);
   if (fix.kind === "add-joint-speed-percent") next = addJointSpeedPercent(before, fix.line);
@@ -7946,7 +7972,7 @@ function completionCatalog() {
   const unique = new Map();
 
   [...coreCompletions, ...teachPendantCompletions, ...advancedTpCompletions, ...commandCompletions].forEach(([text, label]) => {
-    const key = `${text}\u0000${label}`;
+    const key = String(text || "").trim().replace(/\s+/g, " ").toUpperCase();
     if (!unique.has(key)) unique.set(key, [text, label]);
   });
 

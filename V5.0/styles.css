@@ -2708,6 +2708,8 @@ body.resizing .resize-handle::before {
   display: grid;
   gap: 14px;
   margin-top: 12px;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .project-tools-content[hidden] {
@@ -2718,6 +2720,7 @@ body.resizing .resize-handle::before {
   border-top: 1px solid var(--line);
   display: grid;
   gap: 8px;
+  min-width: 0;
   padding-top: 12px;
 }
 
@@ -2743,6 +2746,13 @@ body.resizing .resize-handle::before {
 .reassignment-fields label {
   display: grid;
   gap: 4px;
+  min-width: 0;
+}
+
+.project-tool-section input {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
 }
 
 .reassignment-fields span {
