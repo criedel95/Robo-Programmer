@@ -66,10 +66,3 @@ http://127.0.0.1:4220/
 Use **File > Export Project as ROBO** to create one portable `.ROBO` file. The package includes the full project folder, empty project directories, and any unsaved LS editor changes.
 
 Use **Open ROBO Package** to validate the package, choose a destination, unpack it into a new uniquely named folder, and open it as a normal editable project. `.ROBO` files are ZIP-compatible packages containing a versioned `robo-project.json` manifest.
-
-## Next Milestones
-
-1. Expand lint rules for robot-specific command patterns.
-2. Add a visual program-flow map.
-3. Add a project health dashboard.
-4. Add robot backup and comparison workflows.
