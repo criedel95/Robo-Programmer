@@ -2,6 +2,7 @@
   color-scheme: light;
   --editor-font-size: 14px;
   --editor-line-height: 21.7px;
+  --robot-numeric-font-size: 14px;
   --bg: #eef2f5;
   --panel: #ffffff;
   --panel-soft: #f8fafb;
@@ -169,9 +170,10 @@ select {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: calc(100vh - 24px);
   margin: 0 auto;
   max-width: none;
-  min-height: calc(100vh - 24px);
+  min-height: 0;
   width: 100%;
 }
 
@@ -590,6 +592,10 @@ select {
   flex-direction: column;
   min-height: 620px;
   overflow: hidden;
+}
+
+#robotPositionView.robot-export-view {
+  min-height: 0;
 }
 
 .robot-export-view[hidden] {
@@ -1179,7 +1185,19 @@ select {
   min-height: 0;
 }
 
+.robot-numeric-tab-content {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .robot-pr-tab-content[hidden] {
+  display: none;
+}
+
+.robot-numeric-tab-content[hidden] {
   display: none;
 }
 
@@ -1189,6 +1207,23 @@ select {
   margin-top: 0;
   min-height: 0;
   padding-top: 0;
+}
+
+.robot-numeric-tab-content .robot-pr-section {
+  border-top: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  margin-top: 0;
+  min-height: 0;
+  padding-top: 0;
+}
+
+.robot-numeric-font-tools {
+  flex-shrink: 0;
+}
+
+.robot-numeric-font-tools .icon-button {
+  min-width: 54px;
 }
 .robot-pr-section {
   border-top: 1px solid var(--line);
@@ -1224,6 +1259,109 @@ select {
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   min-height: 460px;
   overflow: hidden;
+}
+
+.robot-numeric-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: none;
+  min-height: 0;
+  overflow: auto;
+}
+
+.robot-numeric-table-wrap .robot-comments-table {
+  margin: 0;
+}
+
+.robot-numeric-table {
+  font-size: var(--robot-numeric-font-size);
+  line-height: 1.45;
+  table-layout: fixed;
+}
+
+.robot-numeric-register-col {
+  width: 92px;
+}
+
+.robot-numeric-value-col {
+  width: 150px;
+}
+
+.robot-numeric-comment-col {
+  width: auto;
+}
+
+.robot-numeric-table th,
+.robot-numeric-table td {
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+.robot-numeric-table tbody tr:nth-child(odd) {
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.robot-numeric-table tbody tr:nth-child(even) {
+  background: var(--panel);
+}
+
+.robot-numeric-table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+
+.robot-numeric-value,
+.robot-numeric-value-input {
+  color: var(--accent);
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+}
+
+.robot-numeric-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-numeric-table td:last-child {
+  overflow-wrap: anywhere;
+}
+
+.robot-numeric-value-input,
+.robot-numeric-comment-input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--ink);
+  font: inherit;
+  min-height: 28px;
+  padding: 2px 5px;
+  width: 100%;
+}
+
+.robot-numeric-value-input {
+  color: var(--accent);
+  text-align: center;
+}
+
+.robot-numeric-value-input:hover,
+.robot-numeric-value-input:focus,
+.robot-numeric-comment-input:hover,
+.robot-numeric-comment-input:focus {
+  background: var(--editor-bg);
+  border-color: var(--focus);
+  outline: none;
+}
+
+.robot-numeric-value-input:disabled,
+.robot-numeric-comment-input:disabled {
+  color: var(--muted);
+  cursor: wait;
+}
+
+.robot-numeric-value-error,
+.robot-numeric-comment-error {
+  border-color: var(--error);
+  box-shadow: inset 0 0 0 1px var(--error);
 }
 
 .robot-pr-list-panel {
@@ -1751,6 +1889,14 @@ select {
   overflow: auto;
 }
 
+.robot-numeric-table-wrap {
+  border-radius: 8px;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  overflow: auto;
+}
+
 .robot-comments-table {
   border-collapse: collapse;
   font-size: 12px;
@@ -1770,6 +1916,15 @@ select {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.robot-numeric-table {
+  font-size: var(--robot-numeric-font-size);
+}
+
+.robot-numeric-table th,
+.robot-numeric-table td {
+  padding: 8px 10px;
 }
 
 .robot-comment-change {

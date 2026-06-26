@@ -581,6 +581,7 @@
           <div class="robot-export-tool-tabs" role="tablist" aria-label="Live Robot tools">
             <button id="robotLiveOverviewTab" type="button" role="tab" aria-selected="true" aria-controls="robotLiveOverviewPanel" title="View automatically refreshed robot state, alarms, and current positions.">Overview</button>
             <button id="robotLiveProgramTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveProgramPanel" title="Monitor the current TP or vision program, recent program history, and source context.">Program Monitor</button>
+            <button id="robotLiveNumericTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveNumericPanel" title="Monitor current Numeric Register values from the online robot.">Numeric Registers</button>
             <button id="robotLivePrTab" type="button" role="tab" aria-selected="false" aria-controls="robotLivePrPanel" title="Browse and edit Position Registers on the online robot.">Position Registers</button>
           </div>
           <div id="robotLiveOverviewPanel" class="robot-export-content robot-position-content" role="tabpanel" aria-labelledby="robotLiveOverviewTab">
@@ -666,6 +667,20 @@
                   <div id="robotProgramSource" class="robot-program-source muted-position">Source context appears when a TP task is available.</div>
                 </section>
               </div>
+            </section>
+          </div>
+          <div id="robotLiveNumericPanel" class="robot-export-content robot-numeric-tab-content" role="tabpanel" aria-labelledby="robotLiveNumericTab" hidden>
+            <section class="robot-pr-section" aria-labelledby="robotNumericHeading">
+              <div class="robot-pr-section-header">
+                <div>
+                  <h3 id="robotNumericHeading">Numeric Registers</h3>
+                </div>
+                <div class="font-size-tools robot-numeric-font-tools" aria-label="Numeric Register font size controls">
+                  <button id="decreaseRobotNumericFontBtn" class="icon-button" type="button" title="Decrease Numeric Register font size" aria-label="Decrease Numeric Register font size">Font-</button>
+                  <button id="increaseRobotNumericFontBtn" class="icon-button" type="button" title="Increase Numeric Register font size" aria-label="Increase Numeric Register font size">Font+</button>
+                </div>
+              </div>
+              <div id="robotNumericTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"></div>
             </section>
           </div>
           <div id="robotLivePrPanel" class="robot-export-content robot-pr-tab-content" role="tabpanel" aria-labelledby="robotLivePrTab" hidden>

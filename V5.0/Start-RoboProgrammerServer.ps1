@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 24
+$serverApiVersion = 26
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -920,6 +920,35 @@ function Send-RobotCometPositionRegister {
   }
 }
 
+function Send-RobotCometVariable {
+  param(
+    [string]$HtcgOrigin,
+    [string]$ProgramName,
+    [string]$VariableName,
+    [string]$Value
+  )
+
+  if ([string]::IsNullOrWhiteSpace($ProgramName) -or [string]::IsNullOrWhiteSpace($VariableName)) {
+    throw "Invalid robot variable write request."
+  }
+  $encodedProgram = [System.Uri]::EscapeDataString($ProgramName)
+  $encodedVariable = [System.Uri]::EscapeDataString($VariableName)
+  $encodedValue = [System.Uri]::EscapeDataString($Value)
+  $sequence = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $path = "/COMET/rpc?func=VMIP_WRITEVA&prog_name=$encodedProgram&var_name=$encodedVariable&value=$encodedValue&_=$sequence"
+  $resultText = Get-RobotRawTextPage $HtcgOrigin $path 15000
+  try {
+    $result = $resultText | ConvertFrom-Json
+  } catch {
+    throw "The robot returned an invalid response to the variable write."
+  }
+  $rpc = @($result.FANUC.RPC)[0]
+  if ($null -eq $rpc -or [string]$rpc.status -notin @("0", "0x0")) {
+    $message = if ($null -ne $rpc -and $rpc.message) { [string]$rpc.message } else { "Unknown controller error." }
+    throw "The robot rejected the variable write: $message"
+  }
+}
+
 function ConvertTo-RobotPositionRegisterCometValue {
   param([string]$FormattedBlock)
 
@@ -1046,6 +1075,136 @@ function Get-RobotPositionRegisterText {
   }
   $bytes = Get-RobotFtpFile $HostName "POSREG.VA"
   return [System.Text.Encoding]::ASCII.GetString($bytes)
+}
+
+function Get-RobotNumericRegisterText {
+  param(
+    [string]$HostName,
+    [string]$HttpOrigin = ""
+  )
+
+  if (-not [string]::IsNullOrWhiteSpace($HttpOrigin)) {
+    try {
+      return Get-RobotRawTextPage $HttpOrigin "/MD/NUMREG.VA" 15000
+    } catch {
+      # Older controllers may not publish NUMREG.VA over HTTP; retain FTP as a read fallback.
+    }
+  }
+  $bytes = Get-RobotFtpFile $HostName "NUMREG.VA"
+  return [System.Text.Encoding]::ASCII.GetString($bytes)
+}
+
+function ConvertFrom-RobotNumericRegisterText {
+  param([string]$Text)
+
+  $registers = @()
+  $normalized = [System.Net.WebUtility]::HtmlDecode(([string]$Text)) -replace "`r?`n", "`n"
+  foreach ($rawLine in @($normalized -split "`n")) {
+    $line = $rawLine.Trim()
+    if (-not $line) { continue }
+    $match = [regex]::Match($line, "^\s*\[(\d+)\]\s*=\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)\s*(?:'([^']*)')?", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+      $match = [regex]::Match($line, "^\s*R\[(\d+)(?::([^\]]*))?\]\s*[:=]\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+      if ($match.Success) {
+        $registers += [pscustomobject]@{
+          index = [int]$match.Groups[1].Value
+          value = [double]$match.Groups[3].Value
+          comment = $match.Groups[2].Value.Trim()
+        }
+      }
+      continue
+    }
+    $registers += [pscustomobject]@{
+      index = [int]$match.Groups[1].Value
+      value = [double]$match.Groups[2].Value
+      comment = $match.Groups[3].Value.Trim()
+    }
+  }
+  return @($registers | Sort-Object index)
+}
+
+function Find-RobotNumericRegister {
+  param(
+    [object[]]$Registers,
+    [int]$Index
+  )
+
+  return $Registers | Where-Object { [int]$_.index -eq $Index } | Select-Object -First 1
+}
+
+function ConvertTo-RobotNumericRegisterValueText {
+  param([double]$Value)
+
+  if ([double]::IsNaN($Value) -or [double]::IsInfinity($Value)) { throw "Numeric Register value must be a finite number." }
+  return $Value.ToString("0.###############", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Handle-RobotNumericRegisterRequest {
+  param(
+    [System.Net.Sockets.NetworkStream]$Stream,
+    [string]$Target,
+    [string]$RequestBody
+  )
+
+  try {
+    $payload = $RequestBody | ConvertFrom-Json
+    $connection = Get-RobotConnectionInfo ([string]$payload.robotAddress)
+    $text = Get-RobotNumericRegisterText $connection.FtpHost $connection.HttpOrigin
+    $registers = @(ConvertFrom-RobotNumericRegisterText $text)
+    if ($Target -eq "/robot-numeric-registers/read") {
+      Send-JsonResponse $Stream 200 "OK" @{
+        ok = $true
+        registers = $registers
+        count = $registers.Count
+        capturedAt = (Get-Date).ToUniversalTime().ToString("o")
+      }
+      return
+    }
+
+    if ($Target -eq "/robot-numeric-registers/set") {
+      $index = [int]$payload.register.index
+      $value = [double]$payload.register.value
+      if ($index -lt 1) { throw "Invalid Numeric Register index." }
+      $original = Find-RobotNumericRegister $registers $index
+      if ($null -eq $original) { throw "R[$index] was not found on the online robot." }
+      $valueText = ConvertTo-RobotNumericRegisterValueText $value
+      $htcgOrigin = Get-RobotHtcgOrigin $connection.HttpOrigin
+
+      $writeErrors = @()
+      $writeSucceeded = $false
+      foreach ($programName in @("*NUMREG*", "*SYSTEM*")) {
+        try {
+          Send-RobotCometVariable $htcgOrigin $programName "`$NUMREG[$index]" $valueText
+          $writeSucceeded = $true
+          break
+        } catch {
+          $writeErrors += "${programName}: $($_.Exception.Message)"
+        }
+      }
+      if (-not $writeSucceeded) {
+        throw "Numeric Register write failed. $($writeErrors -join ' ')"
+      }
+
+      $actual = $null
+      foreach ($delay in @(150, 350, 750)) {
+        Start-Sleep -Milliseconds $delay
+        $verified = @(ConvertFrom-RobotNumericRegisterText (Get-RobotNumericRegisterText $connection.FtpHost $connection.HttpOrigin))
+        $actual = Find-RobotNumericRegister $verified $index
+        if ($null -ne $actual -and [Math]::Abs([double]$actual.value - $value) -le 0.000001) { break }
+      }
+      if ($null -eq $actual -or [Math]::Abs([double]$actual.value - $value) -gt 0.000001) {
+        $actualText = if ($null -eq $actual) { "not found" } else { [string]$actual.value }
+        throw "The controller did not report R[$index] = $valueText after the live write (actual: $actualText)."
+      }
+
+      Send-JsonResponse $Stream 200 "OK" @{ ok = $true; register = $actual }
+      return
+    }
+
+    throw "Unsupported Numeric Register action."
+  } catch {
+    Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
+  }
 }
 
 function Format-RobotPositionRegisterBlock {
@@ -1637,6 +1796,10 @@ try {
 
       if ($method -eq "POST" -and $pathOnly -in @("/robot-position-registers/read", "/robot-position-registers/set")) {
         Handle-RobotPositionRegisterRequest $stream $pathOnly $requestBody
+        continue
+      }
+      if ($method -eq "POST" -and $pathOnly -in @("/robot-numeric-registers/read", "/robot-numeric-registers/set")) {
+        Handle-RobotNumericRegisterRequest $stream $pathOnly $requestBody
         continue
       }
       if ($method -eq "POST" -and $pathOnly -eq "/robot-live/state") {

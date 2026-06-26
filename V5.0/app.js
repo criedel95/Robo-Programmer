@@ -61,9 +61,11 @@ const robotPositionWorkspaceTab = document.querySelector("#robotPositionWorkspac
 const robotPositionView = document.querySelector("#robotPositionView");
 const robotLiveOverviewTab = document.querySelector("#robotLiveOverviewTab");
 const robotLiveProgramTab = document.querySelector("#robotLiveProgramTab");
+const robotLiveNumericTab = document.querySelector("#robotLiveNumericTab");
 const robotLivePrTab = document.querySelector("#robotLivePrTab");
 const robotLiveOverviewPanel = document.querySelector("#robotLiveOverviewPanel");
 const robotLiveProgramPanel = document.querySelector("#robotLiveProgramPanel");
+const robotLiveNumericPanel = document.querySelector("#robotLiveNumericPanel");
 const robotLivePrPanel = document.querySelector("#robotLivePrPanel");
 const robotProgramMonitorStatus = document.querySelector("#robotProgramMonitorStatus");
 const robotProgramMonitorHero = document.querySelector("#robotProgramMonitorHero");
@@ -89,6 +91,9 @@ const robotPrStatus = document.querySelector("#robotPrStatus");
 const robotPrSearch = document.querySelector("#robotPrSearch");
 const robotPrList = document.querySelector("#robotPrList");
 const robotPrDetails = document.querySelector("#robotPrDetails");
+const robotNumericTableWrap = document.querySelector("#robotNumericTableWrap");
+const decreaseRobotNumericFontBtn = document.querySelector("#decreaseRobotNumericFontBtn");
+const increaseRobotNumericFontBtn = document.querySelector("#increaseRobotNumericFontBtn");
 const assignmentSheetTabs = document.querySelector("#assignmentSheetTabs");
 const assignmentStatus = document.querySelector("#assignmentStatus");
 const assignmentPath = document.querySelector("#assignmentPath");
@@ -240,6 +245,10 @@ const editorFontSizeKey = "robo-programmer-editor-font-size";
 const minEditorFontSize = 11;
 const maxEditorFontSize = 22;
 const defaultEditorFontSize = 14;
+const robotNumericFontSizeKey = "robo-programmer-robot-numeric-font-size";
+const minRobotNumericFontSize = 12;
+const maxRobotNumericFontSize = 24;
+const defaultRobotNumericFontSize = 14;
 const robotExportInstructionsCollapsedKey = "robo-programmer-robot-export-instructions-collapsed";
 const liveRobotOverviewInstructionsCollapsedKey = "robo-programmer-live-robot-overview-instructions-collapsed";
 const robotProgramHistoryStoragePrefix = "robo-programmer-program-history:";
@@ -269,6 +278,22 @@ function setEditorFontSize(size) {
 }
 
 setEditorFontSize(savedEditorFontSize());
+
+function savedRobotNumericFontSize() {
+  const stored = Number(localStorage.getItem(robotNumericFontSizeKey));
+  if (!Number.isFinite(stored)) return defaultRobotNumericFontSize;
+  return Math.max(minRobotNumericFontSize, Math.min(maxRobotNumericFontSize, stored));
+}
+
+function setRobotNumericFontSize(size) {
+  const nextSize = Math.max(minRobotNumericFontSize, Math.min(maxRobotNumericFontSize, size));
+  document.documentElement.style.setProperty("--robot-numeric-font-size", `${nextSize}px`);
+  localStorage.setItem(robotNumericFontSizeKey, String(nextSize));
+  decreaseRobotNumericFontBtn.disabled = nextSize <= minRobotNumericFontSize;
+  increaseRobotNumericFontBtn.disabled = nextSize >= maxRobotNumericFontSize;
+}
+
+setRobotNumericFontSize(savedRobotNumericFontSize());
 
 const sampleProgram = `/PROG  PICK_PLACE
 /ATTR
@@ -457,6 +482,12 @@ let selectedRobotPositionRegisterKey = "";
 let robotPositionRegistersAddress = "";
 let robotPositionRegistersLoading = false;
 let robotPositionRegisterCommitActive = false;
+let robotNumericRegisters = [];
+let robotNumericRegistersAddress = "";
+let robotNumericRegistersLoading = false;
+let robotNumericRegistersUpdatedAt = "";
+let robotNumericCommentSaving = false;
+let robotNumericValueSaving = false;
 let robotLsLoadActive = false;
 const robotOfflineActionTitle = "Go Online with Robot to Use";
 
@@ -3933,7 +3964,7 @@ async function callRobotExportApi(path, payload) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok || result.ok === false) {
     if (response.status === 405 || response.status === 404) {
-      throw new Error("The running Robo Programmer server is outdated. Close its server window, then launch Robo Programmer again before using Robot Export.");
+      throw new Error("The running Robo Programmer server is outdated. Close its server window, then launch Robo Programmer again before using live robot tools.");
     }
     throw new Error(result.error || `Local Robot Export service returned HTTP ${response.status}.`);
   }
@@ -4087,9 +4118,16 @@ async function checkRobotOnline({ manual = false } = {}) {
       await readRobotProgramMonitor();
     } catch {
     }
-    try {
-      await readRobotPositionRegisters();
-    } catch {
+    if (activeLiveRobotTool === "numeric-registers") {
+      try {
+        await readRobotNumericRegisters({ force: true });
+      } catch {
+      }
+    } else {
+      try {
+        await readRobotPositionRegisters();
+      } catch {
+      }
     }
     await runRobotExportAutoCheck({ force: manual });
   } catch (error) {
@@ -4170,17 +4208,21 @@ function setRobotExportTool(tool) {
   robotExportCommentsPanel.hidden = !commentsActive;
 }
 function setLiveRobotTool(tool) {
-  activeLiveRobotTool = ["overview", "program-monitor", "position-registers"].includes(tool) ? tool : "overview";
+  activeLiveRobotTool = ["overview", "program-monitor", "numeric-registers", "position-registers"].includes(tool) ? tool : "overview";
   const overviewActive = activeLiveRobotTool === "overview";
   const programActive = activeLiveRobotTool === "program-monitor";
+  const numericActive = activeLiveRobotTool === "numeric-registers";
   const prActive = activeLiveRobotTool === "position-registers";
   robotLiveOverviewTab.setAttribute("aria-selected", String(overviewActive));
   robotLiveProgramTab.setAttribute("aria-selected", String(programActive));
+  robotLiveNumericTab.setAttribute("aria-selected", String(numericActive));
   robotLivePrTab.setAttribute("aria-selected", String(prActive));
   robotLiveOverviewPanel.hidden = !overviewActive;
   robotLiveProgramPanel.hidden = !programActive;
+  robotLiveNumericPanel.hidden = !numericActive;
   robotLivePrPanel.hidden = !prActive;
   if (programActive && robotOnlineStatus === "online") readRobotProgramMonitor().catch(() => {});
+  if (numericActive) readRobotNumericRegisters({ force: true }).catch(() => {});
   if (prActive) readRobotPositionRegisters().catch(() => {});
 }
 function setRobotExportInstructionsOpen(open) {
@@ -4710,6 +4752,7 @@ function resetRobotPositionDisplay() {
   liveRobotState.textContent = "Go Online to load robot state.";
   liveRobotAlarms.textContent = "Go Online to load alarms.";
   resetRobotPositionRegisters();
+  resetRobotNumericRegisters();
   readRobotPositionBtn.disabled = false;
   startRobotPositionBtn.disabled = false;
   stopRobotPositionBtn.disabled = true;
@@ -5012,6 +5055,159 @@ function renderRobotPosition(snapshot) {
     ...robotPositionValuePairs(snapshot.world?.values || {}),
     ...robotExtAxisPairs(snapshot.world?.extAxes || [])
   ], "No world position was returned by the robot.");
+}
+
+function formatRobotNumericValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? "");
+  if (Number.isInteger(number)) return String(number);
+  return number.toFixed(6).replace(/\.?0+$/, "");
+}
+
+function resetRobotNumericRegisters() {
+  robotNumericRegisters = [];
+  robotNumericRegistersAddress = "";
+  robotNumericRegistersLoading = false;
+  robotNumericRegistersUpdatedAt = "";
+  robotNumericTableWrap.innerHTML = "";
+}
+
+function renderRobotNumericRegisters() {
+  const visible = robotNumericRegisters;
+  robotNumericTableWrap.innerHTML = visible.length ? `
+    <table class="robot-comments-table robot-numeric-table">
+      <colgroup>
+        <col class="robot-numeric-register-col">
+        <col class="robot-numeric-value-col">
+        <col class="robot-numeric-comment-col">
+      </colgroup>
+      <thead><tr><th>Register</th><th>Value</th><th>Comment</th></tr></thead>
+      <tbody>
+        ${visible.map((register) => {
+          const comment = register.comment || "No comment";
+          const value = formatRobotNumericValue(register.value);
+          const rawComment = register.comment || "";
+          return `
+            <tr>
+              <td><strong>R[${escapeHtml(register.index)}]</strong></td>
+              <td>
+                <input
+                  class="robot-numeric-value-input"
+                  type="text"
+                  inputmode="decimal"
+                  value="${escapeHtml(value)}"
+                  data-index="${escapeHtml(register.index)}"
+                  data-original="${escapeHtml(value)}"
+                  aria-label="${escapeHtml(`R[${register.index}] value`)}"
+                  title="${escapeHtml(value)}">
+              </td>
+              <td>
+                <input
+                  class="robot-numeric-comment-input"
+                  type="text"
+                  maxlength="16"
+                  value="${escapeHtml(rawComment)}"
+                  data-index="${escapeHtml(register.index)}"
+                  data-original="${escapeHtml(rawComment)}"
+                  aria-label="${escapeHtml(`R[${register.index}] comment`)}"
+                  title="${escapeHtml(comment)}">
+              </td>
+            </tr>
+          `;
+        }).join("")}
+      </tbody>
+    </table>
+  ` : `<div class="assignment-empty">No Numeric Register data is loaded.</div>`;
+}
+
+function robotNumericCommentEditActive() {
+  return Boolean(document.activeElement?.closest?.(".robot-numeric-comment-input, .robot-numeric-value-input"));
+}
+
+function cleanRobotNumericComment(value) {
+  return cleanAssignmentName(value).slice(0, 16);
+}
+
+function parseRobotNumericValue(value) {
+  const text = String(value || "").trim();
+  if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(text)) {
+    throw new Error("Numeric Register value must be a number.");
+  }
+  const number = Number(text);
+  if (!Number.isFinite(number)) throw new Error("Numeric Register value must be a finite number.");
+  return number;
+}
+
+async function saveRobotNumericValue(index, valueText) {
+  if (!project) throw new Error("Open a project before editing Numeric Register values.");
+  const value = parseRobotNumericValue(valueText);
+  const robotOrigin = requireOnlineRobot("update Numeric Register values");
+  const result = await callRobotExportApi("/robot-numeric-registers/set", {
+    robotAddress: robotOrigin,
+    register: { index, value }
+  });
+  const updated = result.register || { index, value };
+  const register = robotNumericRegisters.find((item) => Number(item.index) === Number(index));
+  if (register) register.value = Number(updated.value);
+  projectStatus.textContent = `Saved R[${index}] value to robot.`;
+  return formatRobotNumericValue(updated.value);
+}
+
+async function saveRobotNumericComment(index, comment) {
+  if (!project) throw new Error("Open a project before editing Numeric Register comments.");
+  if (!assignmentWorkbookData) {
+    const workbookData = await primeAssignmentWorkbookData();
+    if (!workbookData) throw new Error("No Data Assignments.xlsx workbook is connected for this project.");
+  }
+
+  const robotOrigin = requireOnlineRobot("update Numeric Register comments");
+  const cleaned = cleanRobotNumericComment(comment);
+  await callRobotExportApi("/robot-comments/set", {
+    robotAddress: robotOrigin,
+    comment: cleaned,
+    index,
+    writeCode: 1
+  });
+
+  const register = robotNumericRegisters.find((item) => Number(item.index) === Number(index));
+  if (register) register.comment = cleaned;
+
+  if (assignmentWorkbookData) {
+    const changed = await saveAssignmentDescription("R", index, cleaned);
+    const updatedFileCount = syncAssignmentChangeToLsFiles("R", index, cleaned);
+    if (activeWorkspaceView === "assignments") renderAssignmentsTable();
+    assignmentStatus.textContent = changed || updatedFileCount
+      ? `Saved R[${index}] to ${assignmentTemplateFileName} and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`
+      : `R[${index}] comment already matched ${assignmentTemplateFileName}.`;
+  }
+
+  projectStatus.textContent = `Saved R[${index}] comment to robot and project Data Assignments.`;
+}
+
+async function readRobotNumericRegisters({ force = false } = {}) {
+  if (robotNumericRegistersLoading) return;
+  if (robotNumericCommentSaving || robotNumericValueSaving || robotNumericCommentEditActive()) return;
+  if (robotOnlineStatus !== "online") {
+    resetRobotNumericRegisters();
+    return;
+  }
+  if (!force && robotNumericRegistersAddress === robotOnlineAddress && robotNumericRegisters.length) return;
+  robotNumericRegistersLoading = true;
+  try {
+    const robotOrigin = requireOnlineRobot("read Numeric Registers");
+    const result = await callRobotExportApi("/robot-numeric-registers/read", { robotAddress: robotOrigin });
+    robotNumericRegisters = Array.isArray(result.registers)
+      ? result.registers.sort((a, b) => Number(a.index) - Number(b.index))
+      : [];
+    robotNumericRegistersAddress = robotOnlineAddress;
+    robotNumericRegistersUpdatedAt = result.capturedAt || new Date().toISOString();
+    renderRobotNumericRegisters();
+  } catch (error) {
+    robotNumericTableWrap.innerHTML = `<div class="assignment-empty">Numeric Register data is unavailable: ${escapeHtml(error.message)}</div>`;
+    throw error;
+  } finally {
+    robotNumericRegistersLoading = false;
+  }
 }
 
 function robotPositionRegisterKey(register) {
@@ -8167,6 +8363,86 @@ decreaseEditorFontBtn.addEventListener("click", () => {
 increaseEditorFontBtn.addEventListener("click", () => {
   setEditorFontSize(savedEditorFontSize() + 1);
 });
+decreaseRobotNumericFontBtn.addEventListener("click", () => {
+  setRobotNumericFontSize(savedRobotNumericFontSize() - 1);
+});
+increaseRobotNumericFontBtn.addEventListener("click", () => {
+  setRobotNumericFontSize(savedRobotNumericFontSize() + 1);
+});
+
+robotNumericTableWrap.addEventListener("keydown", (event) => {
+  const input = event.target.closest(".robot-numeric-comment-input, .robot-numeric-value-input");
+  if (!input) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    input.blur();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    input.value = input.dataset.original || "";
+    input.blur();
+  }
+});
+
+robotNumericTableWrap.addEventListener("change", async (event) => {
+  const input = event.target.closest(".robot-numeric-value-input");
+  if (!input || input.dataset.saving === "true") return;
+  const index = Number(input.dataset.index);
+  const original = input.dataset.original || "";
+  const nextText = String(input.value || "").trim();
+  input.value = nextText;
+  if (!Number.isFinite(index) || index < 1 || nextText === original) return;
+
+  input.dataset.saving = "true";
+  input.disabled = true;
+  input.setAttribute("aria-busy", "true");
+  input.classList.remove("robot-numeric-value-error");
+  robotNumericValueSaving = true;
+  try {
+    const verifiedText = await saveRobotNumericValue(index, nextText);
+    input.value = verifiedText;
+    input.dataset.original = verifiedText;
+    input.title = verifiedText;
+  } catch (error) {
+    input.classList.add("robot-numeric-value-error");
+    input.value = original;
+    projectStatus.textContent = `Unable to save R[${index}] value: ${error.message}`;
+  } finally {
+    robotNumericValueSaving = false;
+    delete input.dataset.saving;
+    input.disabled = false;
+    input.removeAttribute("aria-busy");
+  }
+});
+
+robotNumericTableWrap.addEventListener("change", async (event) => {
+  const input = event.target.closest(".robot-numeric-comment-input");
+  if (!input || input.dataset.saving === "true") return;
+  const index = Number(input.dataset.index);
+  const original = cleanRobotNumericComment(input.dataset.original || "");
+  const cleaned = cleanRobotNumericComment(input.value);
+  input.value = cleaned;
+  if (!Number.isFinite(index) || index < 1 || cleaned === original) return;
+
+  input.dataset.saving = "true";
+  input.disabled = true;
+  input.setAttribute("aria-busy", "true");
+  input.classList.remove("robot-numeric-comment-error");
+  robotNumericCommentSaving = true;
+  try {
+    await saveRobotNumericComment(index, cleaned);
+    input.dataset.original = cleaned;
+    input.title = cleaned || "No comment";
+  } catch (error) {
+    input.classList.add("robot-numeric-comment-error");
+    input.value = original;
+    projectStatus.textContent = `Unable to save R[${index}] comment: ${error.message}`;
+  } finally {
+    robotNumericCommentSaving = false;
+    delete input.dataset.saving;
+    input.disabled = false;
+    input.removeAttribute("aria-busy");
+  }
+});
 
 goOnlineBtn.addEventListener("click", () => {
   if (robotOnlineStatus === "online") {
@@ -8248,6 +8524,10 @@ robotLiveOverviewTab.addEventListener("click", () => {
 
 robotLiveProgramTab.addEventListener("click", () => {
   setLiveRobotTool("program-monitor");
+});
+
+robotLiveNumericTab.addEventListener("click", () => {
+  setLiveRobotTool("numeric-registers");
 });
 
 liveRobotOverviewInstructionsToggle.addEventListener("click", () => {
