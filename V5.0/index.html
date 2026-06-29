@@ -58,7 +58,7 @@
               <button id="assignmentsWorkspaceTab" type="button" aria-pressed="false" title="Open the project Data Assignments workbook editor.">Data Assignments</button>
               <button id="robotExportWorkspaceTab" type="button" aria-pressed="false">Robot Edits</button>
               <button id="robotBackupWorkspaceTab" type="button" aria-pressed="false" title="Back up selected files from the online robot into the project.">Robot Backup</button>
-              <button id="robotPositionWorkspaceTab" type="button" aria-pressed="false" hidden title="View live robot state, program activity, and Position Registers.">Live Robot</button>
+              <button id="robotPositionWorkspaceTab" type="button" aria-pressed="false" hidden title="View live robot activity, alarms, and register data.">Live Robot</button>
             </nav>
           </div>
         </header>
@@ -579,20 +579,20 @@
             </div>
           </div>
           <div class="robot-export-tool-tabs" role="tablist" aria-label="Live Robot tools">
-            <button id="robotLiveOverviewTab" type="button" role="tab" aria-selected="true" aria-controls="robotLiveOverviewPanel" title="View automatically refreshed robot state, alarms, and current positions.">Overview</button>
+            <button id="robotLiveOverviewTab" type="button" role="tab" aria-selected="true" aria-controls="robotLiveOverviewPanel" title="View automatically refreshed alarms and current positions.">Overview</button>
             <button id="robotLiveProgramTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveProgramPanel" title="Monitor the current TP or vision program, recent program history, and source context.">Program Monitor</button>
-            <button id="robotLiveNumericTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveNumericPanel" title="Monitor current Numeric Register values from the online robot.">Numeric Registers</button>
+            <button id="robotLiveNumericTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveNumericPanel" title="Monitor current Numeric Register and Flag data from the online robot.">Registers/Flags</button>
             <button id="robotLivePrTab" type="button" role="tab" aria-selected="false" aria-controls="robotLivePrPanel" title="Browse and edit Position Registers on the online robot.">Position Registers</button>
           </div>
           <div id="robotLiveOverviewPanel" class="robot-export-content robot-position-content" role="tabpanel" aria-labelledby="robotLiveOverviewTab">
             <section class="robot-export-instructions">
               <button id="liveRobotOverviewInstructionsToggle" class="robot-export-instructions-toggle live-robot-overview-instructions-toggle" type="button" aria-expanded="true" aria-controls="liveRobotOverviewInstructionsContent" title="Expand or collapse the Live Robot overview description.">
-                <span>Live Robot State</span>
+                <span>Live Robot Overview</span>
                 <span aria-hidden="true">-</span>
               </button>
               <div id="liveRobotOverviewInstructionsContent" class="robot-export-instructions-content">
-                <p>Live Robot automatically refreshes robot state, active alarms, and current position while Go Online is connected.</p>
-                <p class="beta-notice"><strong>Read-only:</strong> Robot state and current-position cards display live controller data without changing the robot.</p>
+                <p>Live Robot automatically refreshes active alarms and current position while Go Online is connected.</p>
+                <p class="beta-notice"><strong>Read-only:</strong> Overview cards display live controller data without changing the robot.</p>
               </div>
             </section>
             <section class="robot-export-panel robot-position-panel">
@@ -604,22 +604,12 @@
                   <option value="1000" selected>1 sec</option>
                   <option value="2000">2 sec</option>
                 </select>
-                <button id="readRobotPositionBtn" type="button" hidden title="Read the robot state and current position one time.">Read Once</button>
-                <button id="startRobotPositionBtn" type="button" hidden title="Start repeatedly refreshing live robot state and position data.">Start Live Updates</button>
+                <button id="readRobotPositionBtn" type="button" hidden title="Read the current robot position one time.">Read Once</button>
+                <button id="startRobotPositionBtn" type="button" hidden title="Start repeatedly refreshing live robot position data.">Start Live Updates</button>
                 <button id="stopRobotPositionBtn" type="button" disabled hidden title="Stop manual live robot position updates.">Stop</button>
               </div>
               <div id="robotPositionStatus" class="assignment-status">Go Online to load live robot data.</div>
               <div id="robotPositionSummary" class="robot-position-summary"></div>
-              <div class="live-robot-state-grid">
-                <section class="robot-position-card live-robot-state-card">
-                  <h3>Robot State</h3>
-                  <div id="liveRobotState" class="robot-position-values muted-position">Go Online to load robot state.</div>
-                </section>
-                <section class="robot-position-card live-robot-state-card">
-                  <h3>Active Alarms</h3>
-                  <div id="liveRobotAlarms" class="robot-position-values muted-position">Go Online to load alarms.</div>
-                </section>
-              </div>
               <div class="robot-position-grid">
                 <section class="robot-position-card">
                   <h3>Joint Position</h3>
@@ -632,6 +622,10 @@
                 <section class="robot-position-card">
                   <h3>World Position</h3>
                   <div id="robotPositionWorld" class="robot-position-values muted-position">No world data yet.</div>
+                </section>
+                <section class="robot-position-card live-robot-alarm-card">
+                  <h3>Active Alarms</h3>
+                  <div id="liveRobotAlarms" class="robot-position-values muted-position">Go Online to load alarms.</div>
                 </section>
               </div>
             </section>
@@ -673,14 +667,27 @@
             <section class="robot-pr-section" aria-labelledby="robotNumericHeading">
               <div class="robot-pr-section-header">
                 <div>
-                  <h3 id="robotNumericHeading">Numeric Registers</h3>
+                  <h3 id="robotNumericHeading">Registers/Flags</h3>
                 </div>
-                <div class="font-size-tools robot-numeric-font-tools" aria-label="Numeric Register font size controls">
-                  <button id="decreaseRobotNumericFontBtn" class="icon-button" type="button" title="Decrease Numeric Register font size" aria-label="Decrease Numeric Register font size">Font-</button>
-                  <button id="increaseRobotNumericFontBtn" class="icon-button" type="button" title="Increase Numeric Register font size" aria-label="Increase Numeric Register font size">Font+</button>
+                <div class="font-size-tools robot-numeric-font-tools" aria-label="Registers/Flags controls">
+                  <label class="robot-register-edit-toggle" title="Allow live edits to Numeric Registers and Flags">
+                    <input id="robotRegistersEditToggle" type="checkbox">
+                    <span>Enable Edits</span>
+                  </label>
+                  <button id="decreaseRobotNumericFontBtn" class="icon-button" type="button" title="Decrease Registers/Flags font size" aria-label="Decrease Registers/Flags font size">Font-</button>
+                  <button id="increaseRobotNumericFontBtn" class="icon-button" type="button" title="Increase Registers/Flags font size" aria-label="Increase Registers/Flags font size">Font+</button>
                 </div>
               </div>
-              <div id="robotNumericTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"></div>
+              <div class="robot-registers-flags-grid">
+                <section class="robot-registers-flags-column" aria-label="Numeric Registers">
+                  <h4>Numeric Registers</h4>
+                  <div id="robotNumericTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"></div>
+                </section>
+                <section class="robot-registers-flags-column" aria-label="Flags">
+                  <h4>Flags</h4>
+                  <div id="robotFlagTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"></div>
+                </section>
+              </div>
             </section>
           </div>
           <div id="robotLivePrPanel" class="robot-export-content robot-pr-tab-content" role="tabpanel" aria-labelledby="robotLivePrTab" hidden>

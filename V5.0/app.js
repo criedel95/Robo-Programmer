@@ -85,13 +85,14 @@ const robotPositionSummary = document.querySelector("#robotPositionSummary");
 const robotPositionJoints = document.querySelector("#robotPositionJoints");
 const robotPositionUserFrame = document.querySelector("#robotPositionUserFrame");
 const robotPositionWorld = document.querySelector("#robotPositionWorld");
-const liveRobotState = document.querySelector("#liveRobotState");
 const liveRobotAlarms = document.querySelector("#liveRobotAlarms");
 const robotPrStatus = document.querySelector("#robotPrStatus");
 const robotPrSearch = document.querySelector("#robotPrSearch");
 const robotPrList = document.querySelector("#robotPrList");
 const robotPrDetails = document.querySelector("#robotPrDetails");
 const robotNumericTableWrap = document.querySelector("#robotNumericTableWrap");
+const robotFlagTableWrap = document.querySelector("#robotFlagTableWrap");
+const robotRegistersEditToggle = document.querySelector("#robotRegistersEditToggle");
 const decreaseRobotNumericFontBtn = document.querySelector("#decreaseRobotNumericFontBtn");
 const increaseRobotNumericFontBtn = document.querySelector("#increaseRobotNumericFontBtn");
 const assignmentSheetTabs = document.querySelector("#assignmentSheetTabs");
@@ -488,8 +489,17 @@ let robotNumericRegistersLoading = false;
 let robotNumericRegistersUpdatedAt = "";
 let robotNumericCommentSaving = false;
 let robotNumericValueSaving = false;
+let robotFlags = [];
+let robotFlagsAddress = "";
+let robotFlagsLoading = false;
+let robotFlagCommentSaving = false;
+let robotFlagStateSaving = false;
 let robotLsLoadActive = false;
 const robotOfflineActionTitle = "Go Online with Robot to Use";
+
+function robotRegisterEditsEnabled() {
+  return Boolean(robotRegistersEditToggle?.checked);
+}
 
 function setRobotOnlineActionState(button, disabled, enabledTitle = "") {
   button.disabled = Boolean(disabled);
@@ -3720,10 +3730,22 @@ function parseRobotCommentPage(html, category) {
       const input = inputs[index];
       if (!typeConfig || !input) return;
       const itemIndex = Number(reference[2]);
+      let state = "";
+      if (type === "F") {
+        const checkbox = row.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+          state = checkbox.checked ? "ON" : "OFF";
+        } else {
+          const nearbyText = row.textContent.slice(reference.index + reference[0].length, reference.index + reference[0].length + 32);
+          const stateMatch = nearbyText.match(/\b(ON|OFF)\b/i);
+          state = stateMatch ? stateMatch[1].toUpperCase() : "";
+        }
+      }
       comments.set(assignmentKey(type, itemIndex), {
         type,
         index: itemIndex,
         robotComment: input.value || "",
+        state,
         writeCode: typeConfig.writeCode,
         limit: Number(input.maxLength) > 0 ? Number(input.maxLength) : typeConfig.limit
       });
@@ -3732,16 +3754,16 @@ function parseRobotCommentPage(html, category) {
   return comments;
 }
 
-async function readRobotComments(robotOrigin) {
+async function readRobotComments(robotOrigin, categories = robotCommentCategories) {
   const comments = new Map();
   const result = await callRobotExportApi("/robot-comments/read", {
     robotAddress: robotOrigin,
-    categories: robotCommentCategories.map((category) => ({
+    categories: categories.map((category) => ({
       readCode: category.readCode,
       range: category.range || ""
     }))
   });
-  const categoryByRequest = new Map(robotCommentCategories.map((category) => [`${category.readCode}|${category.range || ""}`, category]));
+  const categoryByRequest = new Map(categories.map((category) => [`${category.readCode}|${category.range || ""}`, category]));
   (result.pages || []).forEach((page) => {
     const category = categoryByRequest.get(`${page.readCode}|${page.range || ""}`);
     if (!category) return;
@@ -3758,21 +3780,26 @@ function buildRobotCommentComparison(robotComments) {
     const spreadsheetComment = cleanAssignmentName(cell.description || "");
     const tooLong = spreadsheetComment.length > robotItem.limit;
     const different = !robotCommentsMatch(spreadsheetComment, robotItem.robotComment);
+    const blankClear = !spreadsheetComment && Boolean(String(robotItem.robotComment || "").trimEnd());
     comparison.push({
       ...robotItem,
       spreadsheetComment,
       different,
-      selected: Boolean(spreadsheetComment) && different && !tooLong,
-      status: !spreadsheetComment
-        ? "Skipped blank"
-        : tooLong
-          ? `Too long (${spreadsheetComment.length}/${robotItem.limit})`
-          : robotCommentsMatch(spreadsheetComment, robotItem.robotComment)
-            ? "Matches"
+      selected: different && !tooLong,
+      status: tooLong
+        ? `Too long (${spreadsheetComment.length}/${robotItem.limit})`
+        : !different
+          ? "Matches"
+          : blankClear
+            ? "Clear robot"
             : "Change"
     });
   });
   return comparison.sort((a, b) => a.type.localeCompare(b.type) || a.index - b.index);
+}
+
+function robotCommentIsPushable(item) {
+  return Boolean(item?.different) && !String(item?.status || "").startsWith("Too long");
 }
 
 function resetRobotCommentTypeFilter() {
@@ -3809,10 +3836,10 @@ function renderRobotCommentComparison() {
   updateRobotCommentTypeFilterOptions();
   const visibleComparison = robotCommentVisibleComparison();
   const differences = robotCommentComparison.filter((item) => item.different).length;
-  const changed = robotCommentComparison.filter((item) => item.status === "Change");
-  const selectedChanges = robotCommentComparison.filter((item) => item.selected && item.status === "Change");
+  const pushable = robotCommentComparison.filter(robotCommentIsPushable);
+  const selectedChanges = robotCommentComparison.filter((item) => item.selected && robotCommentIsPushable(item));
   const matching = robotCommentComparison.filter((item) => item.status === "Matches").length;
-  const skipped = robotCommentComparison.filter((item) => item.status === "Skipped blank").length;
+  const clears = robotCommentComparison.filter((item) => item.status === "Clear robot").length;
   const invalid = robotCommentComparison.filter((item) => item.status.startsWith("Too long")).length;
   const activeFilters = [
     robotCommentTypeFilterValue === "all" ? "" : robotCommentTypeFilterValue,
@@ -3821,8 +3848,8 @@ function renderRobotCommentComparison() {
   const filterMessage = activeFilters.length
     ? ` Showing ${visibleComparison.length} row${visibleComparison.length === 1 ? "" : "s"} for ${activeFilters.join(" and ")}.`
     : "";
-  const visibleSelected = visibleComparison.filter(({ item }) => item.selected);
-  robotCommentsSummary.textContent = `${differences} difference${differences === 1 ? "" : "s"} (${changed.length} pushable), ${matching} matching, ${skipped} blank skipped, ${invalid} over-length.${filterMessage}`;
+  const visibleSelected = visibleComparison.filter(({ item }) => item.selected && robotCommentIsPushable(item));
+  robotCommentsSummary.textContent = `${differences} difference${differences === 1 ? "" : "s"} (${pushable.length} pushable, ${clears} clear${clears === 1 ? "" : "s"}), ${matching} matching, ${invalid} over-length.${filterMessage}`;
   const robotOnline = robotOnlineStatus === "online";
   setRobotOnlineActionState(pushRobotCommentsBtn, !robotOnline || selectedChanges.length === 0);
   setRobotOnlineActionState(selectVisibleRobotCommentsBtn, !robotOnline || visibleComparison.length === 0);
@@ -3834,8 +3861,8 @@ function renderRobotCommentComparison() {
       </thead>
       <tbody>
         ${visibleComparison.map(({ item, index }) => `
-          <tr class="${item.status === "Change" ? "robot-comment-change" : ""}">
-            <td><input type="checkbox" data-robot-comment-index="${index}" aria-label="Push ${escapeHtml(`${item.type}[${item.index}]`)}" ${item.selected ? "checked" : ""}></td>
+          <tr class="${robotCommentIsPushable(item) ? "robot-comment-change" : ""}">
+            <td><input type="checkbox" data-robot-comment-index="${index}" aria-label="Push ${escapeHtml(`${item.type}[${item.index}]`)}" ${item.selected ? "checked" : ""} ${robotCommentIsPushable(item) ? "" : "disabled"}></td>
             <td>${escapeHtml(`${item.type}[${item.index}]`)}</td>
             <td>${escapeHtml(item.spreadsheetComment || "(blank)")}</td>
             <td>${escapeHtml(item.robotComment || "(blank)")}</td>
@@ -3870,7 +3897,7 @@ async function compareRobotComments() {
 }
 
 async function pushSelectedRobotComments() {
-  const selected = robotCommentComparison.filter((item) => item.selected && item.status === "Change");
+  const selected = robotCommentComparison.filter((item) => item.selected && robotCommentIsPushable(item));
   if (!selected.length) return;
   const robotOrigin = requireOnlineRobot("push robot comments");
   const shouldPush = confirm(`Push ${selected.length} selected comment${selected.length === 1 ? "" : "s"} to ${robotOnlineAddress}? This action will change comments on the online robot.`);
@@ -4120,7 +4147,7 @@ async function checkRobotOnline({ manual = false } = {}) {
     }
     if (activeLiveRobotTool === "numeric-registers") {
       try {
-        await readRobotNumericRegisters({ force: true });
+        await readRobotRegistersAndFlags({ force: true });
       } catch {
       }
     } else {
@@ -4222,7 +4249,7 @@ function setLiveRobotTool(tool) {
   robotLiveNumericPanel.hidden = !numericActive;
   robotLivePrPanel.hidden = !prActive;
   if (programActive && robotOnlineStatus === "online") readRobotProgramMonitor().catch(() => {});
-  if (numericActive) readRobotNumericRegisters({ force: true }).catch(() => {});
+  if (numericActive) readRobotRegistersAndFlags({ force: true }).catch(() => {});
   if (prActive) readRobotPositionRegisters().catch(() => {});
 }
 function setRobotExportInstructionsOpen(open) {
@@ -4747,29 +4774,15 @@ function resetRobotPositionDisplay() {
   robotPositionJoints.textContent = "No joint data yet.";
   robotPositionUserFrame.textContent = "No user-frame data yet.";
   robotPositionWorld.textContent = "No world data yet.";
-  liveRobotState.classList.add("muted-position");
   liveRobotAlarms.classList.add("muted-position");
-  liveRobotState.textContent = "Go Online to load robot state.";
   liveRobotAlarms.textContent = "Go Online to load alarms.";
   resetRobotPositionRegisters();
   resetRobotNumericRegisters();
+  resetRobotFlags();
   readRobotPositionBtn.disabled = false;
   startRobotPositionBtn.disabled = false;
   stopRobotPositionBtn.disabled = true;
   resetRobotProgramMonitor();
-}
-
-function renderLiveRobotStatePairs(container, pairs, emptyMessage) {
-  const rows = pairs.filter((item) => item.value !== "" && item.value !== null && item.value !== undefined);
-  container.classList.toggle("muted-position", rows.length === 0);
-  container.innerHTML = rows.length
-    ? rows.map((item) => `
-      <div class="robot-position-value">
-        <strong>${escapeHtml(item.label)}</strong>
-        <span>${escapeHtml(item.value)}</span>
-      </div>
-    `).join("")
-    : escapeHtml(emptyMessage);
 }
 
 function renderLiveRobotAlarms(alarms = [], warnings = []) {
@@ -4790,21 +4803,6 @@ function renderLiveRobotAlarms(alarms = [], warnings = []) {
 function renderLiveRobotState(snapshot) {
   const position = snapshot.position || snapshot;
   renderRobotPosition(position);
-  const summary = snapshot.summary || {};
-  const state = summary.state || {};
-  const options = summary.options || {};
-  const highlights = Array.isArray(summary.rawHighlights) ? summary.rawHighlights.filter(Boolean) : [];
-  const fallbackSummary = highlights.length ? highlights.slice(0, 4).join(" | ") : "";
-  renderLiveRobotStatePairs(liveRobotState, [
-    { label: "Mode", value: state.mode || "" },
-    { label: "Program", value: state.program || "" },
-    { label: "Run State", value: state.runState || "" },
-    { label: "Servo", value: state.servo || "" },
-    { label: "Override", value: state.override || "" },
-    { label: "ASCII Loader", value: options.asciiProgramLoader === true ? "Available" : options.asciiProgramLoader === false ? "Not reported" : "" },
-    { label: "FTP", value: options.ftpInterface === true ? "Reported" : options.ftpInterface === false ? "Not reported" : "" },
-    { label: "Summary", value: fallbackSummary }
-  ], "No robot state details were returned by the summary page.");
   renderLiveRobotAlarms(snapshot.alarms, snapshot.warnings);
 }
 
@@ -5072,8 +5070,16 @@ function resetRobotNumericRegisters() {
   robotNumericTableWrap.innerHTML = "";
 }
 
+function resetRobotFlags() {
+  robotFlags = [];
+  robotFlagsAddress = "";
+  robotFlagsLoading = false;
+  robotFlagTableWrap.innerHTML = "";
+}
+
 function renderRobotNumericRegisters() {
   const visible = robotNumericRegisters;
+  const editsDisabled = robotRegisterEditsEnabled() ? "" : " disabled";
   robotNumericTableWrap.innerHTML = visible.length ? `
     <table class="robot-comments-table robot-numeric-table">
       <colgroup>
@@ -5099,7 +5105,7 @@ function renderRobotNumericRegisters() {
                   data-index="${escapeHtml(register.index)}"
                   data-original="${escapeHtml(value)}"
                   aria-label="${escapeHtml(`R[${register.index}] value`)}"
-                  title="${escapeHtml(value)}">
+                  title="${escapeHtml(value)}"${editsDisabled}>
               </td>
               <td>
                 <input
@@ -5110,7 +5116,7 @@ function renderRobotNumericRegisters() {
                   data-index="${escapeHtml(register.index)}"
                   data-original="${escapeHtml(rawComment)}"
                   aria-label="${escapeHtml(`R[${register.index}] comment`)}"
-                  title="${escapeHtml(comment)}">
+                  title="${escapeHtml(comment)}"${editsDisabled}>
               </td>
             </tr>
           `;
@@ -5124,8 +5130,81 @@ function robotNumericCommentEditActive() {
   return Boolean(document.activeElement?.closest?.(".robot-numeric-comment-input, .robot-numeric-value-input"));
 }
 
+function robotFlagCommentEditActive() {
+  return Boolean(document.activeElement?.closest?.(".robot-flag-comment-input, .robot-flag-state-select"));
+}
+
 function cleanRobotNumericComment(value) {
   return cleanAssignmentName(value).slice(0, 16);
+}
+
+function cleanRobotFlagComment(value) {
+  return cleanAssignmentName(value).slice(0, 24);
+}
+
+function robotFlagStateClass(state) {
+  const normalized = String(state || "").toUpperCase();
+  if (normalized === "ON") return "robot-flag-state-on";
+  if (normalized === "OFF") return "robot-flag-state-off";
+  return "robot-flag-state-unknown";
+}
+
+function renderRobotFlags() {
+  const visible = robotFlags;
+  const editsDisabled = robotRegisterEditsEnabled() ? "" : " disabled";
+  robotFlagTableWrap.innerHTML = visible.length ? `
+    <table class="robot-comments-table robot-numeric-table robot-flag-table">
+      <colgroup>
+        <col class="robot-flag-index-col">
+        <col class="robot-flag-state-col">
+        <col class="robot-flag-comment-col">
+      </colgroup>
+      <thead><tr><th>Flag</th><th>Status</th><th>Comment</th></tr></thead>
+      <tbody>
+        ${visible.map((flag) => {
+          const state = String(flag.state || "").toUpperCase();
+          const displayState = state || "--";
+          const comment = flag.comment || "No comment";
+          const rawComment = flag.comment || "";
+          return `
+            <tr>
+              <td><strong>F[${escapeHtml(flag.index)}]</strong></td>
+              <td>
+                <select
+                  class="robot-flag-state robot-flag-state-select ${robotFlagStateClass(state)}"
+                  data-index="${escapeHtml(flag.index)}"
+                  data-original="${escapeHtml(state)}"
+                  aria-label="${escapeHtml(`F[${flag.index}] state`)}"
+                  title="${escapeHtml(displayState)}"${editsDisabled}>
+                  <option value="OFF"${state === "OFF" ? " selected" : ""}>OFF</option>
+                  <option value="ON"${state === "ON" ? " selected" : ""}>ON</option>
+                </select>
+              </td>
+              <td>
+                <input
+                  class="robot-flag-comment-input"
+                  type="text"
+                  maxlength="24"
+                  value="${escapeHtml(rawComment)}"
+                  data-index="${escapeHtml(flag.index)}"
+                  data-original="${escapeHtml(rawComment)}"
+                  aria-label="${escapeHtml(`F[${flag.index}] comment`)}"
+                  title="${escapeHtml(comment)}"${editsDisabled}>
+              </td>
+            </tr>
+          `;
+        }).join("")}
+      </tbody>
+    </table>
+  ` : `<div class="assignment-empty">No Flag data is loaded.</div>`;
+}
+
+function applyRobotRegisterEditState() {
+  const disabled = !robotRegisterEditsEnabled();
+  robotNumericTableWrap.querySelectorAll(".robot-numeric-value-input, .robot-numeric-comment-input")
+    .forEach((input) => { input.disabled = disabled; });
+  robotFlagTableWrap.querySelectorAll(".robot-flag-state-select, .robot-flag-comment-input")
+    .forEach((input) => { input.disabled = disabled; });
 }
 
 function parseRobotNumericValue(value) {
@@ -5184,6 +5263,53 @@ async function saveRobotNumericComment(index, comment) {
   projectStatus.textContent = `Saved R[${index}] comment to robot and project Data Assignments.`;
 }
 
+async function saveRobotFlagComment(index, comment) {
+  if (!project) throw new Error("Open a project before editing Flag comments.");
+  if (!assignmentWorkbookData) {
+    const workbookData = await primeAssignmentWorkbookData();
+    if (!workbookData) throw new Error("No Data Assignments.xlsx workbook is connected for this project.");
+  }
+
+  const robotOrigin = requireOnlineRobot("update Flag comments");
+  const cleaned = cleanRobotFlagComment(comment);
+  await callRobotExportApi("/robot-comments/set", {
+    robotAddress: robotOrigin,
+    comment: cleaned,
+    index,
+    writeCode: 19
+  });
+
+  const flag = robotFlags.find((item) => Number(item.index) === Number(index));
+  if (flag) flag.comment = cleaned;
+
+  if (assignmentWorkbookData) {
+    const changed = await saveAssignmentDescription("F", index, cleaned);
+    const updatedFileCount = syncAssignmentChangeToLsFiles("F", index, cleaned);
+    if (activeWorkspaceView === "assignments") renderAssignmentsTable();
+    assignmentStatus.textContent = changed || updatedFileCount
+      ? `Saved F[${index}] to ${assignmentTemplateFileName} and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`
+      : `F[${index}] comment already matched ${assignmentTemplateFileName}.`;
+  }
+
+  projectStatus.textContent = `Saved F[${index}] comment to robot and project Data Assignments.`;
+}
+
+async function saveRobotFlagState(index, state) {
+  if (!project) throw new Error("Open a project before editing Flag states.");
+  const normalized = String(state || "").trim().toUpperCase();
+  if (!["ON", "OFF"].includes(normalized)) throw new Error("Flag state must be ON or OFF.");
+  const robotOrigin = requireOnlineRobot("update Flag states");
+  const result = await callRobotExportApi("/robot-flags/set", {
+    robotAddress: robotOrigin,
+    flag: { index, state: normalized }
+  });
+  const updated = result.flag || { index, state: normalized };
+  const flag = robotFlags.find((item) => Number(item.index) === Number(index));
+  if (flag) flag.state = String(updated.state || normalized).toUpperCase();
+  projectStatus.textContent = `Saved F[${index}] state to robot.`;
+  return String(updated.state || normalized).toUpperCase();
+}
+
 async function readRobotNumericRegisters({ force = false } = {}) {
   if (robotNumericRegistersLoading) return;
   if (robotNumericCommentSaving || robotNumericValueSaving || robotNumericCommentEditActive()) return;
@@ -5208,6 +5334,58 @@ async function readRobotNumericRegisters({ force = false } = {}) {
   } finally {
     robotNumericRegistersLoading = false;
   }
+}
+
+async function readRobotFlags({ force = false } = {}) {
+  if (robotFlagsLoading) return;
+  if (robotFlagCommentSaving || robotFlagStateSaving || robotFlagCommentEditActive()) return;
+  if (robotOnlineStatus !== "online") {
+    resetRobotFlags();
+    return;
+  }
+  if (!force && robotFlagsAddress === robotOnlineAddress && robotFlags.length) return;
+  robotFlagsLoading = true;
+  try {
+    const robotOrigin = requireOnlineRobot("read Flags");
+    const flagCategory = robotCommentCategories.find((category) => category.types.some((item) => item.type === "F"));
+    const [comments, stateResult] = await Promise.all([
+      readRobotComments(robotOrigin, flagCategory ? [flagCategory] : []),
+      callRobotExportApi("/robot-flags/read", { robotAddress: robotOrigin })
+    ]);
+    const flagStates = new Map((Array.isArray(stateResult.flags) ? stateResult.flags : [])
+      .map((flag) => [Number(flag.index), flag]));
+    const flagIndexes = new Set([
+      ...[...comments.values()].filter((item) => item.type === "F").map((item) => Number(item.index)),
+      ...flagStates.keys()
+    ]);
+    robotFlags = [...flagIndexes]
+      .filter((index) => Number.isFinite(index) && index > 0)
+      .sort((a, b) => a - b)
+      .map((index) => {
+        const commentItem = comments.get(assignmentKey("F", index));
+        const stateItem = flagStates.get(index);
+        return {
+          index,
+          state: stateItem?.state || commentItem?.state || "",
+          comment: commentItem?.robotComment ?? stateItem?.comment ?? "",
+          limit: commentItem?.limit || 24
+        };
+      });
+    robotFlagsAddress = robotOnlineAddress;
+    renderRobotFlags();
+  } catch (error) {
+    robotFlagTableWrap.innerHTML = `<div class="assignment-empty">Flag data is unavailable: ${escapeHtml(error.message)}</div>`;
+    throw error;
+  } finally {
+    robotFlagsLoading = false;
+  }
+}
+
+async function readRobotRegistersAndFlags({ force = false } = {}) {
+  await Promise.allSettled([
+    readRobotNumericRegisters({ force }),
+    readRobotFlags({ force })
+  ]);
 }
 
 function robotPositionRegisterKey(register) {
@@ -8369,6 +8547,12 @@ decreaseRobotNumericFontBtn.addEventListener("click", () => {
 increaseRobotNumericFontBtn.addEventListener("click", () => {
   setRobotNumericFontSize(savedRobotNumericFontSize() + 1);
 });
+robotRegistersEditToggle.addEventListener("change", () => {
+  applyRobotRegisterEditState();
+  projectStatus.textContent = robotRegisterEditsEnabled()
+    ? "Registers/Flags edits are enabled."
+    : "Registers/Flags edits are disabled.";
+});
 
 robotNumericTableWrap.addEventListener("keydown", (event) => {
   const input = event.target.closest(".robot-numeric-comment-input, .robot-numeric-value-input");
@@ -8386,6 +8570,10 @@ robotNumericTableWrap.addEventListener("keydown", (event) => {
 robotNumericTableWrap.addEventListener("change", async (event) => {
   const input = event.target.closest(".robot-numeric-value-input");
   if (!input || input.dataset.saving === "true") return;
+  if (!robotRegisterEditsEnabled()) {
+    input.value = input.dataset.original || "";
+    return;
+  }
   const index = Number(input.dataset.index);
   const original = input.dataset.original || "";
   const nextText = String(input.value || "").trim();
@@ -8417,6 +8605,10 @@ robotNumericTableWrap.addEventListener("change", async (event) => {
 robotNumericTableWrap.addEventListener("change", async (event) => {
   const input = event.target.closest(".robot-numeric-comment-input");
   if (!input || input.dataset.saving === "true") return;
+  if (!robotRegisterEditsEnabled()) {
+    input.value = input.dataset.original || "";
+    return;
+  }
   const index = Number(input.dataset.index);
   const original = cleanRobotNumericComment(input.dataset.original || "");
   const cleaned = cleanRobotNumericComment(input.value);
@@ -8438,6 +8630,90 @@ robotNumericTableWrap.addEventListener("change", async (event) => {
     projectStatus.textContent = `Unable to save R[${index}] comment: ${error.message}`;
   } finally {
     robotNumericCommentSaving = false;
+    delete input.dataset.saving;
+    input.disabled = false;
+    input.removeAttribute("aria-busy");
+  }
+});
+
+robotFlagTableWrap.addEventListener("keydown", (event) => {
+  const input = event.target.closest(".robot-flag-comment-input, .robot-flag-state-select");
+  if (!input) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    input.blur();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    input.value = input.dataset.original || "";
+    input.blur();
+  }
+});
+
+robotFlagTableWrap.addEventListener("change", async (event) => {
+  const input = event.target.closest(".robot-flag-state-select");
+  if (!input || input.dataset.saving === "true") return;
+  if (!robotRegisterEditsEnabled()) {
+    input.value = input.dataset.original || "";
+    return;
+  }
+  const index = Number(input.dataset.index);
+  const original = String(input.dataset.original || "").toUpperCase();
+  const nextState = String(input.value || "").toUpperCase();
+  if (!Number.isFinite(index) || index < 1 || !["ON", "OFF"].includes(nextState) || nextState === original) return;
+
+  input.dataset.saving = "true";
+  input.disabled = true;
+  input.setAttribute("aria-busy", "true");
+  input.classList.remove("robot-flag-state-error");
+  robotFlagStateSaving = true;
+  try {
+    const verifiedState = await saveRobotFlagState(index, nextState);
+    input.value = verifiedState;
+    input.dataset.original = verifiedState;
+    input.title = verifiedState;
+    input.classList.toggle("robot-flag-state-on", verifiedState === "ON");
+    input.classList.toggle("robot-flag-state-off", verifiedState === "OFF");
+    input.classList.toggle("robot-flag-state-unknown", !["ON", "OFF"].includes(verifiedState));
+  } catch (error) {
+    input.classList.add("robot-flag-state-error");
+    input.value = original;
+    projectStatus.textContent = `Unable to save F[${index}] state: ${error.message}`;
+  } finally {
+    robotFlagStateSaving = false;
+    delete input.dataset.saving;
+    input.disabled = false;
+    input.removeAttribute("aria-busy");
+  }
+});
+
+robotFlagTableWrap.addEventListener("change", async (event) => {
+  const input = event.target.closest(".robot-flag-comment-input");
+  if (!input || input.dataset.saving === "true") return;
+  if (!robotRegisterEditsEnabled()) {
+    input.value = input.dataset.original || "";
+    return;
+  }
+  const index = Number(input.dataset.index);
+  const original = cleanRobotFlagComment(input.dataset.original || "");
+  const cleaned = cleanRobotFlagComment(input.value);
+  input.value = cleaned;
+  if (!Number.isFinite(index) || index < 1 || cleaned === original) return;
+
+  input.dataset.saving = "true";
+  input.disabled = true;
+  input.setAttribute("aria-busy", "true");
+  input.classList.remove("robot-flag-comment-error");
+  robotFlagCommentSaving = true;
+  try {
+    await saveRobotFlagComment(index, cleaned);
+    input.dataset.original = cleaned;
+    input.title = cleaned || "No comment";
+  } catch (error) {
+    input.classList.add("robot-flag-comment-error");
+    input.value = original;
+    projectStatus.textContent = `Unable to save F[${index}] comment: ${error.message}`;
+  } finally {
+    robotFlagCommentSaving = false;
     delete input.dataset.saving;
     input.disabled = false;
     input.removeAttribute("aria-busy");
@@ -8752,7 +9028,7 @@ robotCommentDifferenceFilter.addEventListener("change", () => {
 
 selectVisibleRobotCommentsBtn.addEventListener("click", () => {
   robotCommentVisibleComparison().forEach(({ item }) => {
-    item.selected = true;
+    if (robotCommentIsPushable(item)) item.selected = true;
   });
   renderRobotCommentComparison();
 });

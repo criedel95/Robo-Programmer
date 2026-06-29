@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 26
+$serverApiVersion = 28
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -949,6 +949,32 @@ function Send-RobotCometVariable {
   }
 }
 
+function Send-RobotIoValue {
+  param(
+    [string]$HtcgOrigin,
+    [int]$IoType,
+    [int]$Index,
+    [int]$Value
+  )
+
+  if ($IoType -lt 1 -or $Index -lt 1 -or $Value -notin @(0, 1)) {
+    throw "Invalid robot I/O write request."
+  }
+  $sequence = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $path = "/COMET/rpc?func=IOVALSET&type=$IoType&index=$Index&value=$Value&_=$sequence"
+  $resultText = Get-RobotRawTextPage $HtcgOrigin $path 15000
+  try {
+    $result = $resultText | ConvertFrom-Json
+  } catch {
+    throw "The robot returned an invalid response to the I/O write."
+  }
+  $rpc = @($result.FANUC.RPC)[0]
+  if ($null -eq $rpc -or [string]$rpc.status -notin @("0", "0x0")) {
+    $message = if ($null -ne $rpc -and $rpc.message) { [string]$rpc.message } else { "Unknown controller error." }
+    throw "The robot rejected the I/O write: $message"
+  }
+}
+
 function ConvertTo-RobotPositionRegisterCometValue {
   param([string]$FormattedBlock)
 
@@ -1094,6 +1120,23 @@ function Get-RobotNumericRegisterText {
   return [System.Text.Encoding]::ASCII.GetString($bytes)
 }
 
+function Get-RobotIoStateText {
+  param(
+    [string]$HostName,
+    [string]$HttpOrigin = ""
+  )
+
+  if (-not [string]::IsNullOrWhiteSpace($HttpOrigin)) {
+    try {
+      return Get-RobotRawTextPage $HttpOrigin "/MD/IOSTATE.DG" 15000
+    } catch {
+      # Retain FTP as a fallback for controllers that do not publish IOSTATE.DG over HTTP.
+    }
+  }
+  $bytes = Get-RobotFtpFile $HostName "IOSTATE.DG"
+  return [System.Text.Encoding]::ASCII.GetString($bytes)
+}
+
 function ConvertFrom-RobotNumericRegisterText {
   param([string]$Text)
 
@@ -1121,6 +1164,29 @@ function ConvertFrom-RobotNumericRegisterText {
     }
   }
   return @($registers | Sort-Object index)
+}
+
+function ConvertFrom-RobotFlagStateText {
+  param([string]$Text)
+
+  $flags = @()
+  $withoutTags = [regex]::Replace([string]$Text, "<[^>]+>", " ")
+  $normalized = [System.Net.WebUtility]::HtmlDecode($withoutTags) -replace "`r?`n", "`n"
+  foreach ($rawLine in @($normalized -split "`n")) {
+    $matches = @([regex]::Matches($rawLine, "\bFLG\[\s*(\d+)\]\s+(ON|OFF)\b", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))
+    for ($matchIndex = 0; $matchIndex -lt $matches.Count; $matchIndex++) {
+      $match = $matches[$matchIndex]
+      $commentStart = $match.Index + $match.Length
+      $commentEnd = if ($matchIndex + 1 -lt $matches.Count) { $matches[$matchIndex + 1].Index } else { $rawLine.Length }
+      $comment = if ($commentEnd -gt $commentStart) { $rawLine.Substring($commentStart, $commentEnd - $commentStart).Trim() } else { "" }
+      $flags += [pscustomobject]@{
+        index = [int]$match.Groups[1].Value
+        state = $match.Groups[2].Value.ToUpperInvariant()
+        comment = $comment
+      }
+    }
+  }
+  return @($flags | Sort-Object index)
 }
 
 function Find-RobotNumericRegister {
@@ -1202,6 +1268,61 @@ function Handle-RobotNumericRegisterRequest {
     }
 
     throw "Unsupported Numeric Register action."
+  } catch {
+    Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
+  }
+}
+
+function Handle-RobotFlagRequest {
+  param(
+    [System.Net.Sockets.NetworkStream]$Stream,
+    [string]$Target,
+    [string]$RequestBody
+  )
+
+  try {
+    $payload = $RequestBody | ConvertFrom-Json
+    $connection = Get-RobotConnectionInfo ([string]$payload.robotAddress)
+    $text = Get-RobotIoStateText $connection.FtpHost $connection.HttpOrigin
+    $flags = @(ConvertFrom-RobotFlagStateText $text)
+    if ($Target -eq "/robot-flags/read") {
+      Send-JsonResponse $Stream 200 "OK" @{
+        ok = $true
+        flags = $flags
+        count = $flags.Count
+        capturedAt = (Get-Date).ToUniversalTime().ToString("o")
+      }
+      return
+    }
+
+    if ($Target -eq "/robot-flags/set") {
+      $index = [int]$payload.flag.index
+      $state = ([string]$payload.flag.state).Trim().ToUpperInvariant()
+      if ($index -lt 1) { throw "Invalid Flag index." }
+      if ($state -notin @("ON", "OFF")) { throw "Flag state must be ON or OFF." }
+      $original = $flags | Where-Object { [int]$_.index -eq $index } | Select-Object -First 1
+      if ($null -eq $original) { throw "F[$index] was not found on the online robot." }
+
+      $htcgOrigin = Get-RobotHtcgOrigin $connection.HttpOrigin
+      Send-RobotIoValue $htcgOrigin 35 $index $(if ($state -eq "ON") { 1 } else { 0 })
+
+      $actual = $null
+      foreach ($delay in @(150, 350, 750)) {
+        Start-Sleep -Milliseconds $delay
+        $verified = @(ConvertFrom-RobotFlagStateText (Get-RobotIoStateText $connection.FtpHost $connection.HttpOrigin))
+        $actual = $verified | Where-Object { [int]$_.index -eq $index } | Select-Object -First 1
+        if ($null -ne $actual -and [string]$actual.state -eq $state) { break }
+      }
+      if ($null -eq $actual -or [string]$actual.state -ne $state) {
+        $actualText = if ($null -eq $actual) { "not found" } else { [string]$actual.state }
+        throw "The controller did not report F[$index] = $state after the live write (actual: $actualText)."
+      }
+
+      Send-JsonResponse $Stream 200 "OK" @{ ok = $true; flag = $actual }
+      return
+    }
+
+    throw "Unsupported Flag action."
   } catch {
     Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
   }
@@ -1800,6 +1921,10 @@ try {
       }
       if ($method -eq "POST" -and $pathOnly -in @("/robot-numeric-registers/read", "/robot-numeric-registers/set")) {
         Handle-RobotNumericRegisterRequest $stream $pathOnly $requestBody
+        continue
+      }
+      if ($method -eq "POST" -and $pathOnly -in @("/robot-flags/read", "/robot-flags/set")) {
+        Handle-RobotFlagRequest $stream $pathOnly $requestBody
         continue
       }
       if ($method -eq "POST" -and $pathOnly -eq "/robot-live/state") {

@@ -798,7 +798,7 @@ select {
 
 .robot-position-panel {
   align-content: start;
-  grid-template-rows: repeat(5, max-content);
+  grid-template-rows: repeat(4, max-content);
   overflow: auto;
 }
 
@@ -835,34 +835,26 @@ select {
   font-size: 13px;
   min-height: 18px;
 }
-.live-robot-state-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  min-height: 0;
-}
-
-.live-robot-state-card {
-  display: flex;
-  flex-direction: column;
-  height: clamp(180px, 30vh, 260px);
-  min-height: 0;
-  overflow: hidden;
-}
-
-.live-robot-state-card .robot-position-values {
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 6px;
-  scrollbar-gutter: stable;
-}
-
 .live-robot-alarm-line span {
   color: var(--warn);
   font-size: 12px;
   min-width: 0;
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.live-robot-alarm-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  min-height: 0;
+}
+
+.live-robot-alarm-card .robot-position-values {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
 }
 
 .robot-program-monitor-content {
@@ -1117,7 +1109,7 @@ select {
 .robot-position-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   min-height: 0;
   overflow: visible;
 }
@@ -1219,12 +1211,62 @@ select {
 }
 
 .robot-numeric-font-tools {
+  align-items: center;
+  display: flex;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .robot-numeric-font-tools .icon-button {
   min-width: 54px;
 }
+
+.robot-register-edit-toggle {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  user-select: none;
+}
+
+.robot-register-edit-toggle:hover,
+.robot-register-edit-toggle:focus-within {
+  border-color: var(--focus);
+  color: var(--ink);
+}
+
+.robot-register-edit-toggle input {
+  accent-color: var(--accent);
+}
+
+.robot-registers-flags-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.robot-registers-flags-column {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.robot-registers-flags-column h4 {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
 .robot-pr-section {
   border-top: 1px solid var(--line);
   display: grid;
@@ -1291,6 +1333,18 @@ select {
   width: auto;
 }
 
+.robot-flag-index-col {
+  width: 80px;
+}
+
+.robot-flag-state-col {
+  width: 96px;
+}
+
+.robot-flag-comment-col {
+  width: auto;
+}
+
 .robot-numeric-table th,
 .robot-numeric-table td {
   padding: 8px 10px;
@@ -1327,7 +1381,8 @@ select {
 }
 
 .robot-numeric-value-input,
-.robot-numeric-comment-input {
+.robot-numeric-comment-input,
+.robot-flag-comment-input {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -1343,25 +1398,79 @@ select {
   text-align: center;
 }
 
-.robot-numeric-value-input:hover,
-.robot-numeric-value-input:focus,
-.robot-numeric-comment-input:hover,
-.robot-numeric-comment-input:focus {
+.robot-numeric-value-input:not(:disabled):hover,
+.robot-numeric-value-input:not(:disabled):focus,
+.robot-numeric-comment-input:not(:disabled):hover,
+.robot-numeric-comment-input:not(:disabled):focus,
+.robot-flag-comment-input:not(:disabled):hover,
+.robot-flag-comment-input:not(:disabled):focus {
   background: var(--editor-bg);
   border-color: var(--focus);
   outline: none;
 }
 
 .robot-numeric-value-input:disabled,
-.robot-numeric-comment-input:disabled {
+.robot-numeric-comment-input:disabled,
+.robot-flag-comment-input:disabled {
   color: var(--muted);
-  cursor: wait;
+  cursor: default;
+  pointer-events: none;
 }
 
 .robot-numeric-value-error,
-.robot-numeric-comment-error {
+.robot-numeric-comment-error,
+.robot-flag-comment-error {
   border-color: var(--error);
   box-shadow: inset 0 0 0 1px var(--error);
+}
+
+.robot-flag-state {
+  border-radius: 999px;
+  display: inline-block;
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+  min-width: 48px;
+  padding: 2px 8px;
+  text-align: center;
+}
+
+.robot-flag-state-select {
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: inherit;
+  outline: none;
+}
+
+.robot-flag-state-select:not(:disabled):hover,
+.robot-flag-state-select:not(:disabled):focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 45%, transparent);
+}
+
+.robot-flag-state-select:disabled {
+  cursor: default;
+  opacity: 1;
+  pointer-events: none;
+}
+
+.robot-flag-state-error {
+  border-color: var(--error);
+  box-shadow: inset 0 0 0 1px var(--error);
+}
+
+.robot-flag-state-on {
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  color: var(--ok);
+}
+
+.robot-flag-state-off {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
+}
+
+.robot-flag-state-unknown {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
 }
 
 .robot-pr-list-panel {
@@ -1549,8 +1658,8 @@ select {
 }
 @media (max-width: 1100px) {
   .robot-position-grid,
-  .live-robot-state-grid,
   .robot-backup-progress,
+  .robot-registers-flags-grid,
   .robot-pr-browser {
     grid-template-columns: 1fr;
   }
