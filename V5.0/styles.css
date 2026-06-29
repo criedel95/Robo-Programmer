@@ -212,11 +212,13 @@ select {
 
 .go-online-control {
   align-items: center;
+  background: color-mix(in srgb, var(--muted) 7%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--muted) 38%, var(--line));
   border-radius: 999px;
   display: inline-flex;
   flex-shrink: 0;
-  overflow: hidden;
+  min-height: 26px;
+  overflow: visible;
 }
 
 .go-online-control[hidden] {
@@ -227,7 +229,7 @@ select {
   align-items: center;
   background: color-mix(in srgb, var(--muted) 10%, var(--panel));
   border: 0;
-  border-radius: 0;
+  border-radius: 999px 0 0 999px;
   color: var(--ink);
   display: inline-flex;
   flex-shrink: 0;
@@ -243,16 +245,137 @@ select {
   outline: 1px solid transparent;
 }
 
+.robot-address-picker {
+  align-self: stretch;
+  display: flex;
+  position: relative;
+}
+
 .go-online-select {
+  align-items: center;
   background: color-mix(in srgb, var(--muted) 7%, var(--panel));
   border: 0;
   border-left: 1px solid color-mix(in srgb, var(--muted) 32%, var(--line));
-  border-radius: 0;
+  border-radius: 0 999px 999px 0;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 7px;
+  justify-content: space-between;
+  min-height: 24px;
+  max-width: 168px;
+  min-width: 118px;
+  padding: 0 8px 0 7px;
+}
+
+.go-online-select:hover,
+.go-online-select:focus-visible {
+  background: color-mix(in srgb, var(--muted) 13%, var(--panel));
+  outline: none;
+}
+
+.go-online-select span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-address-menu {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  min-width: 260px;
+  padding: 4px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 5px);
+  z-index: 80;
+}
+
+.robot-address-menu[hidden] {
+  display: none;
+}
+
+.robot-address-menu-row {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.robot-address-menu-row.selected .robot-address-choice {
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+}
+
+.robot-address-choice,
+.robot-address-rename,
+.robot-address-remove,
+.robot-address-menu-action {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  min-height: 34px;
+}
+
+.robot-address-choice {
+  display: grid;
+  justify-items: start;
+  min-width: 0;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.robot-address-choice span,
+.robot-address-choice small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-address-choice small,
+.robot-address-empty {
   color: var(--muted);
   font-size: 11px;
-  min-height: 24px;
-  max-width: 138px;
-  padding: 0 22px 0 7px;
+}
+
+.robot-address-choice:hover,
+.robot-address-choice:focus-visible,
+.robot-address-rename:hover,
+.robot-address-rename:focus-visible,
+.robot-address-remove:hover,
+.robot-address-remove:focus-visible,
+.robot-address-menu-action:hover,
+.robot-address-menu-action:focus-visible {
+  background: color-mix(in srgb, var(--accent) 11%, var(--panel));
+  outline: none;
+}
+
+.robot-address-rename,
+.robot-address-remove {
+  color: var(--muted);
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+.robot-address-remove:hover,
+.robot-address-remove:focus-visible {
+  color: var(--error);
+}
+
+.robot-address-menu-action {
+  border-top: 1px solid var(--line);
+  color: var(--accent-strong);
+  display: block;
+  font-weight: 700;
+  margin-top: 4px;
+  padding: 6px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.robot-address-empty {
+  padding: 8px;
 }
 
 .go-online-indicator {

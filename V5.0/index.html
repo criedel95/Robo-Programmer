@@ -47,9 +47,13 @@
                 <span class="go-online-indicator" aria-hidden="true"></span>
                 <span id="goOnlineLabel">Online</span>
               </button>
-              <select id="robotOnlineAddressSelect" class="go-online-select" aria-label="Robot IP address">
-                <option value="">No robot IP</option>
-              </select>
+              <div class="robot-address-picker">
+                <button id="robotOnlineAddressButton" class="go-online-select" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose a saved robot">
+                  <span id="robotOnlineAddressButtonText">No robot IP</span>
+                  <span aria-hidden="true">v</span>
+                </button>
+                <div id="robotOnlineAddressMenu" class="robot-address-menu" role="menu" hidden></div>
+              </div>
             </div>
           </div>
           <div id="topbarActions" class="actions" hidden>

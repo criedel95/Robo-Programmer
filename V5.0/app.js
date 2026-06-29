@@ -15,7 +15,9 @@ const topbarActions = document.querySelector("#topbarActions");
 const goOnlineControl = document.querySelector("#goOnlineControl");
 const goOnlineBtn = document.querySelector("#goOnlineBtn");
 const goOnlineLabel = document.querySelector("#goOnlineLabel");
-const robotOnlineAddressSelect = document.querySelector("#robotOnlineAddressSelect");
+const robotOnlineAddressButton = document.querySelector("#robotOnlineAddressButton");
+const robotOnlineAddressButtonText = document.querySelector("#robotOnlineAddressButtonText");
+const robotOnlineAddressMenu = document.querySelector("#robotOnlineAddressMenu");
 const recentProjectsList = document.querySelector("#recentProjectsList");
 const clearRecentProjectsBtn = document.querySelector("#clearRecentProjectsBtn");
 const editorLayout = document.querySelector(".editor-layout");
@@ -256,6 +258,7 @@ const robotProgramHistoryStoragePrefix = "robo-programmer-program-history:";
 const robotProgramHistoryLimit = 10;
 const robotOnlineAddressKey = "robo-programmer-online-robot-address";
 const robotOnlineAddressListKey = "robo-programmer-online-robot-addresses";
+const robotOnlineAddressProfilesKey = "robo-programmer-online-robot-profiles";
 const robotOnlinePollMs = 5000;
 
 function savedEditorFontSize() {
@@ -477,6 +480,7 @@ let robotOnlineTimer = null;
 let robotOnlineChecking = false;
 let robotOnlineStatus = "offline";
 let robotOnlineAddress = "";
+let robotOnlineAbortController = null;
 let robotExportAutoCheckedAddress = "";
 let robotPositionRegisters = [];
 let selectedRobotPositionRegisterKey = "";
@@ -3982,11 +3986,12 @@ function robotExportErrorLocation(exported) {
   return line > 0 && column > 0 ? { line, column } : null;
 }
 
-async function callRobotExportApi(path, payload) {
+async function callRobotExportApi(path, payload, options = {}) {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: options.signal
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || result.ok === false) {
@@ -4017,33 +4022,121 @@ function requireOnlineRobot(actionLabel = "use this tool") {
   return robotOrigin;
 }
 
-function robotOnlineAddressList() {
+function robotProfileAddress(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
   try {
-    const stored = JSON.parse(localStorage.getItem(robotOnlineAddressListKey) || "[]");
-    return [...new Set(stored.concat(project?.robotAddress || "", robotOnlineAddress || "", localStorage.getItem(robotOnlineAddressKey) || "")
-      .map((address) => String(address || "").trim())
-      .filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+    return normalizeRobotAddress(text).replace(/^https?:\/\//i, "");
   } catch {
-    return [project?.robotAddress, robotOnlineAddress, localStorage.getItem(robotOnlineAddressKey)]
-      .map((address) => String(address || "").trim())
-      .filter(Boolean);
+    return text.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
   }
 }
 
-function saveRobotOnlineAddressList(addresses) {
-  localStorage.setItem(robotOnlineAddressListKey, JSON.stringify([...new Set(addresses.filter(Boolean))].sort()));
+function normalizeRobotProfile(profile) {
+  const address = robotProfileAddress(typeof profile === "string" ? profile : profile?.address);
+  if (!address) return null;
+  return {
+    address,
+    name: cleanAssignmentName(typeof profile === "object" ? profile?.name || "" : "").slice(0, 32),
+    lastConnected: Number(typeof profile === "object" ? profile?.lastConnected : 0) || 0
+  };
+}
+
+function robotOnlineProfiles() {
+  const profiles = [];
+  try {
+    const storedProfiles = JSON.parse(localStorage.getItem(robotOnlineAddressProfilesKey) || "[]");
+    if (Array.isArray(storedProfiles)) profiles.push(...storedProfiles);
+  } catch {
+  }
+  try {
+    const storedAddresses = JSON.parse(localStorage.getItem(robotOnlineAddressListKey) || "[]");
+    if (Array.isArray(storedAddresses)) profiles.push(...storedAddresses);
+  } catch {
+  }
+  profiles.push(project?.robotAddress || "", robotOnlineAddress || "", localStorage.getItem(robotOnlineAddressKey) || "");
+
+  const byAddress = new Map();
+  profiles.map(normalizeRobotProfile).filter(Boolean).forEach((profile) => {
+    const existing = byAddress.get(profile.address);
+    byAddress.set(profile.address, {
+      address: profile.address,
+      name: profile.name || existing?.name || "",
+      lastConnected: Math.max(profile.lastConnected || 0, existing?.lastConnected || 0)
+    });
+  });
+
+  return [...byAddress.values()].sort((a, b) => {
+    if ((b.lastConnected || 0) !== (a.lastConnected || 0)) return (b.lastConnected || 0) - (a.lastConnected || 0);
+    const aLabel = a.name || a.address;
+    const bLabel = b.name || b.address;
+    return aLabel.localeCompare(bLabel, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+function saveRobotOnlineProfiles(profiles) {
+  const byAddress = new Map();
+  profiles.map(normalizeRobotProfile).filter(Boolean).forEach((profile) => {
+    const existing = byAddress.get(profile.address);
+    byAddress.set(profile.address, {
+      address: profile.address,
+      name: profile.name || existing?.name || "",
+      lastConnected: Math.max(profile.lastConnected || 0, existing?.lastConnected || 0)
+    });
+  });
+  const cleanProfiles = [...byAddress.values()];
+  localStorage.setItem(robotOnlineAddressProfilesKey, JSON.stringify(cleanProfiles));
+  localStorage.setItem(robotOnlineAddressListKey, JSON.stringify(cleanProfiles.map((profile) => profile.address)));
+}
+
+function upsertRobotOnlineProfile(address, updates = {}) {
+  const displayAddress = robotProfileAddress(address);
+  if (!displayAddress) return;
+  const profiles = robotOnlineProfiles();
+  const existing = profiles.find((profile) => profile.address === displayAddress);
+  if (existing) {
+    Object.assign(existing, updates, { address: displayAddress });
+  } else {
+    profiles.push({
+      address: displayAddress,
+      name: cleanAssignmentName(updates.name || "").slice(0, 32),
+      lastConnected: Number(updates.lastConnected) || 0
+    });
+  }
+  saveRobotOnlineProfiles(profiles);
+}
+
+function selectedRobotProfile() {
+  const current = robotProfileAddress(robotOnlineAddress || savedRobotOnlineAddress());
+  return robotOnlineProfiles().find((profile) => profile.address === current) || null;
+}
+
+function robotProfileLabel(profile) {
+  return profile?.name || profile?.address || "No robot IP";
 }
 
 function renderRobotOnlineAddressSelect() {
-  const addresses = robotOnlineAddressList();
-  const current = robotOnlineAddress || savedRobotOnlineAddress();
-  robotOnlineAddressSelect.innerHTML = `
-    ${addresses.length ? addresses.map((address) => (
-      `<option value="${escapeHtml(address)}">${escapeHtml(address)}</option>`
-    )).join("") : `<option value="">No robot IP</option>`}
-    <option value="__add__">Add robot...</option>
+  const profiles = robotOnlineProfiles();
+  const current = robotProfileAddress(robotOnlineAddress || savedRobotOnlineAddress());
+  const currentProfile = profiles.find((profile) => profile.address === current) || profiles[0] || null;
+  if (!current && currentProfile) robotOnlineAddress = currentProfile.address;
+  robotOnlineAddressButtonText.textContent = currentProfile ? robotProfileLabel(currentProfile) : "No robot IP";
+  robotOnlineAddressButton.title = currentProfile?.name
+    ? `${currentProfile.name} (${currentProfile.address})`
+    : currentProfile?.address || "Choose a saved robot";
+  robotOnlineAddressMenu.innerHTML = `
+    ${profiles.length ? profiles.map((profile) => `
+      <div class="robot-address-menu-row${profile.address === current ? " selected" : ""}" role="menuitem" data-address="${escapeHtml(profile.address)}" tabindex="-1">
+        <button class="robot-address-choice" type="button" data-address="${escapeHtml(profile.address)}">
+          <span>${escapeHtml(robotProfileLabel(profile))}</span>
+          ${profile.name ? `<small>${escapeHtml(profile.address)}</small>` : ""}
+        </button>
+        <button class="robot-address-rename" type="button" data-address="${escapeHtml(profile.address)}" title="Rename saved robot" aria-label="${escapeHtml(`Rename ${robotProfileLabel(profile)}`)}">Edit</button>
+        <button class="robot-address-remove" type="button" data-address="${escapeHtml(profile.address)}" title="Remove saved robot" aria-label="${escapeHtml(`Remove ${robotProfileLabel(profile)}`)}">x</button>
+      </div>
+    `).join("") : `<div class="robot-address-empty">No saved robots</div>`}
+    <button class="robot-address-menu-action" type="button" data-action="add" role="menuitem">Add robot...</button>
   `;
-  robotOnlineAddressSelect.value = addresses.includes(current) ? current : (addresses[0] || "");
 }
 
 function setRobotOnlineUi(status, message = "") {
@@ -4051,7 +4144,7 @@ function setRobotOnlineUi(status, message = "") {
   const robotActionsEnabled = status === "online";
   goOnlineBtn.classList.remove("offline", "connecting", "online", "failed");
   goOnlineBtn.classList.add(status);
-  goOnlineBtn.disabled = status === "connecting";
+  goOnlineBtn.disabled = false;
   setRobotOnlineActionState(compareRobotCommentsBtn, !robotActionsEnabled);
   setRobotOnlineActionState(checkRobotExportBtn, !robotActionsEnabled);
   if (!robotBackupActive) setRobotOnlineActionState(inventoryRobotBackupBtn, !robotActionsEnabled);
@@ -4061,9 +4154,9 @@ function setRobotOnlineUi(status, message = "") {
   enforceRobotOnlineActionState();
   const labels = {
     offline: "Go Online",
-    connecting: "Connecting...",
+    connecting: "Cancel",
     online: "Online",
-    failed: "Connection Failed"
+    failed: "Retry"
   };
   goOnlineLabel.textContent = labels[status] || "Go Online";
   goOnlineBtn.title = message || (robotOnlineAddress ? `Robot: ${robotOnlineAddress}` : "Connect to a robot");
@@ -4080,7 +4173,7 @@ async function rememberRobotOnlineAddress(address) {
   const displayAddress = normalized.replace(/^https?:\/\//i, "");
   robotOnlineAddress = displayAddress;
   localStorage.setItem(robotOnlineAddressKey, displayAddress);
-  saveRobotOnlineAddressList(robotOnlineAddressList().concat(displayAddress));
+  upsertRobotOnlineProfile(displayAddress, { lastConnected: Date.now() });
   robotAddressInput.value = displayAddress;
   robotExportAddressInput.value = displayAddress;
   robotBackupAddressInput.value = displayAddress;
@@ -4091,6 +4184,35 @@ async function rememberRobotOnlineAddress(address) {
     project.robotAddress = displayAddress;
   }
   return normalized;
+}
+
+async function selectRobotOnlineAddress(address, { persist = true } = {}) {
+  const displayAddress = robotProfileAddress(address);
+  robotOnlineAddress = displayAddress;
+  localStorage.setItem(robotOnlineAddressKey, displayAddress);
+  robotAddressInput.value = displayAddress;
+  robotExportAddressInput.value = displayAddress;
+  robotBackupAddressInput.value = displayAddress;
+  robotPositionAddressInput.value = displayAddress;
+  upsertRobotOnlineProfile(displayAddress);
+  if (persist && project?.directoryHandle) {
+    await persistProjectRobotSettings(displayAddress);
+  } else if (persist && project) {
+    project.robotAddress = displayAddress;
+  }
+  renderRobotOnlineAddressSelect();
+}
+
+function closeRobotAddressMenu() {
+  robotOnlineAddressMenu.hidden = true;
+  robotOnlineAddressButton.setAttribute("aria-expanded", "false");
+}
+
+function toggleRobotAddressMenu(forceOpen = null) {
+  const open = forceOpen === null ? robotOnlineAddressMenu.hidden : Boolean(forceOpen);
+  renderRobotOnlineAddressSelect();
+  robotOnlineAddressMenu.hidden = !open;
+  robotOnlineAddressButton.setAttribute("aria-expanded", String(open));
 }
 
 function goOffline() {
@@ -4118,9 +4240,7 @@ function goOffline() {
 
 async function checkRobotOnline({ manual = false } = {}) {
   if (robotOnlineChecking) return;
-  let address = robotOnlineAddressSelect.value && robotOnlineAddressSelect.value !== "__add__"
-    ? robotOnlineAddressSelect.value
-    : robotOnlineAddress || savedRobotOnlineAddress();
+  let address = robotOnlineAddress || selectedRobotProfile()?.address || savedRobotOnlineAddress();
   if (!address && manual) {
     address = prompt("Enter the robot IP address or hostname:", "");
     if (address === null) return;
@@ -4131,12 +4251,13 @@ async function checkRobotOnline({ manual = false } = {}) {
   }
 
   robotOnlineChecking = true;
+  robotOnlineAbortController = new AbortController();
   if (manual || robotOnlineStatus === "offline") {
     setRobotOnlineUi("connecting", `Connecting to ${address}...`);
   }
   try {
     const robotOrigin = await rememberRobotOnlineAddress(address);
-    const liveState = await callRobotExportApi("/robot-live/state", { robotAddress: robotOrigin });
+    const liveState = await callRobotExportApi("/robot-live/state", { robotAddress: robotOrigin }, { signal: robotOnlineAbortController.signal });
     renderLiveRobotState(liveState);
     robotPositionStatus.textContent = `Live Robot data refreshed from ${robotOnlineAddress}.`;
     setRobotOnlineUi("online", `Online with ${robotOnlineAddress}. Refreshing every ${robotOnlinePollMs / 1000} seconds.`);
@@ -4158,12 +4279,18 @@ async function checkRobotOnline({ manual = false } = {}) {
     }
     await runRobotExportAutoCheck({ force: manual });
   } catch (error) {
-    setRobotOnlineUi("failed", `Connection failed: ${error.message}`);
+    if (error.name === "AbortError") {
+      setRobotOnlineUi("offline", robotOnlineAddress ? `Connection canceled. Saved robot: ${robotOnlineAddress}` : "Connection canceled.");
+      if (manual) projectStatus.textContent = "Robot connection canceled.";
+      return;
+    }
+    setRobotOnlineUi("offline", `Connection failed: ${error.message}`);
     if (manual) {
       projectStatus.textContent = `Robot connection failed: ${error.message}`;
     }
   } finally {
     robotOnlineChecking = false;
+    robotOnlineAbortController = null;
   }
 }
 
@@ -8721,6 +8848,11 @@ robotFlagTableWrap.addEventListener("change", async (event) => {
 });
 
 goOnlineBtn.addEventListener("click", () => {
+  if (robotOnlineStatus === "connecting") {
+    robotOnlineAbortController?.abort();
+    setRobotOnlineUi("offline", robotOnlineAddress ? `Canceling connection to ${robotOnlineAddress}...` : "Canceling connection...");
+    return;
+  }
   if (robotOnlineStatus === "online") {
     goOffline();
     return;
@@ -8730,44 +8862,91 @@ goOnlineBtn.addEventListener("click", () => {
   });
 });
 
-robotOnlineAddressSelect.addEventListener("change", async () => {
-  if (robotOnlineAddressSelect.value === "__add__") {
-    const address = prompt("Enter the robot IP address or hostname:", robotOnlineAddress || "");
-    if (address === null) {
-      renderRobotOnlineAddressSelect();
-      return;
+robotOnlineAddressButton.addEventListener("click", () => {
+  toggleRobotAddressMenu();
+});
+
+robotOnlineAddressMenu.addEventListener("click", async (event) => {
+  const removeButton = event.target.closest(".robot-address-remove");
+  const renameButton = event.target.closest(".robot-address-rename");
+  const choiceButton = event.target.closest(".robot-address-choice");
+  const actionButton = event.target.closest("[data-action]");
+
+  if (removeButton) {
+    event.stopPropagation();
+    const address = removeButton.dataset.address;
+    const profile = robotOnlineProfiles().find((item) => item.address === address);
+    if (!profile) return;
+    if (!confirm(`Remove ${robotProfileLabel(profile)} from saved robots?`)) return;
+    const remainingProfiles = robotOnlineProfiles().filter((item) => item.address !== address);
+    if (robotOnlineStatus === "online" && robotOnlineAddress === address) goOffline();
+    if (robotOnlineAddress === address) robotOnlineAddress = "";
+    if (localStorage.getItem(robotOnlineAddressKey) === address) localStorage.removeItem(robotOnlineAddressKey);
+    if (project?.robotAddress === address) project.robotAddress = "";
+    saveRobotOnlineProfiles(remainingProfiles);
+    if (!robotOnlineAddress) {
+      const nextProfile = remainingProfiles[0];
+      await selectRobotOnlineAddress(nextProfile?.address || "", { persist: Boolean(nextProfile) });
     }
-    try {
-      await rememberRobotOnlineAddress(address);
-      setRobotOnlineUi(robotOnlineStatus, `Selected robot: ${robotOnlineAddress}`);
-    } catch (error) {
-      setRobotOnlineUi("failed", `Invalid robot address: ${error.message}`);
-      return;
-    }
-  } else {
-    robotOnlineAddress = robotOnlineAddressSelect.value;
-    localStorage.setItem(robotOnlineAddressKey, robotOnlineAddress);
-    robotAddressInput.value = robotOnlineAddress;
-    robotExportAddressInput.value = robotOnlineAddress;
-    robotBackupAddressInput.value = robotOnlineAddress;
-    robotPositionAddressInput.value = robotOnlineAddress;
-    if (project?.directoryHandle) {
-      persistProjectRobotSettings(robotOnlineAddress).catch((error) => {
-        projectStatus.textContent = `Unable to remember robot address for this project: ${error.message}`;
-      });
-    } else if (project) {
-      project.robotAddress = robotOnlineAddress;
-    }
+    renderRobotOnlineAddressSelect();
+    toggleRobotAddressMenu(true);
+    return;
   }
 
-  if (robotOnlineStatus === "online") {
-    goOffline();
-    checkRobotOnline({ manual: true }).catch((error) => {
-      setRobotOnlineUi("failed", `Connection failed: ${error.message}`);
-    });
-  } else {
-    setRobotOnlineUi(robotOnlineStatus, robotOnlineAddress ? `Selected robot: ${robotOnlineAddress}` : "No robot address has been saved yet.");
+  if (renameButton) {
+    event.stopPropagation();
+    const address = renameButton.dataset.address;
+    const profiles = robotOnlineProfiles();
+    const profile = profiles.find((item) => item.address === address);
+    if (!profile) return;
+    const name = prompt("Robot display name:", profile.name || "");
+    if (name === null) return;
+    profile.name = cleanAssignmentName(name).slice(0, 32);
+    saveRobotOnlineProfiles(profiles);
+    renderRobotOnlineAddressSelect();
+    toggleRobotAddressMenu(true);
+    return;
   }
+
+  if (choiceButton) {
+    const address = choiceButton.dataset.address;
+    await selectRobotOnlineAddress(address).catch((error) => {
+      projectStatus.textContent = `Unable to remember robot address for this project: ${error.message}`;
+    });
+    closeRobotAddressMenu();
+    if (robotOnlineStatus === "online") {
+      goOffline();
+      checkRobotOnline({ manual: true }).catch((error) => {
+        setRobotOnlineUi("offline", `Connection failed: ${error.message}`);
+      });
+    } else {
+      setRobotOnlineUi(robotOnlineStatus, robotOnlineAddress ? `Selected robot: ${robotOnlineAddress}` : "No robot address has been saved yet.");
+    }
+    return;
+  }
+
+  if (actionButton?.dataset.action === "add") {
+    const address = prompt("Enter the robot IP address or hostname:", robotOnlineAddress || "");
+    if (address === null) return;
+    try {
+      const displayAddress = normalizeRobotAddress(address).replace(/^https?:\/\//i, "");
+      const name = prompt("Optional display name:", "") || "";
+      upsertRobotOnlineProfile(displayAddress, { name: cleanAssignmentName(name).slice(0, 32) });
+      await selectRobotOnlineAddress(displayAddress);
+      closeRobotAddressMenu();
+      setRobotOnlineUi(robotOnlineStatus, `Selected robot: ${robotOnlineAddress}`);
+    } catch (error) {
+      setRobotOnlineUi("offline", `Invalid robot address: ${error.message}`);
+    }
+  }
+});
+
+document.addEventListener("click", (event) => {
+  if (!goOnlineControl.contains(event.target)) closeRobotAddressMenu();
+});
+
+robotOnlineAddressButton.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeRobotAddressMenu();
 });
 
 editorWorkspaceTab.addEventListener("click", () => {
