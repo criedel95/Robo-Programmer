@@ -1417,6 +1417,14 @@ select {
   text-align: right;
 }
 
+.robot-pr-header-tools {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
 .robot-pr-browser {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1630,6 +1638,16 @@ select {
   min-height: 36px;
   padding: 7px 9px;
   width: 100%;
+}
+
+.robot-pr-field input:disabled,
+.robot-pr-field select:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink);
+  cursor: default;
+  opacity: 1;
+  pointer-events: none;
 }
 
 .robot-pr-list {

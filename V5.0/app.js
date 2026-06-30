@@ -17,6 +17,7 @@ const goOnlineBtn = document.querySelector("#goOnlineBtn");
 const goOnlineLabel = document.querySelector("#goOnlineLabel");
 const robotOnlineAddressButton = document.querySelector("#robotOnlineAddressButton");
 const robotOnlineAddressButtonText = document.querySelector("#robotOnlineAddressButtonText");
+const robotOnlineAddressChevron = document.querySelector("#robotOnlineAddressChevron");
 const robotOnlineAddressMenu = document.querySelector("#robotOnlineAddressMenu");
 const recentProjectsList = document.querySelector("#recentProjectsList");
 const clearRecentProjectsBtn = document.querySelector("#clearRecentProjectsBtn");
@@ -89,6 +90,7 @@ const robotPositionUserFrame = document.querySelector("#robotPositionUserFrame")
 const robotPositionWorld = document.querySelector("#robotPositionWorld");
 const liveRobotAlarms = document.querySelector("#liveRobotAlarms");
 const robotPrStatus = document.querySelector("#robotPrStatus");
+const robotPrEditToggle = document.querySelector("#robotPrEditToggle");
 const robotPrSearch = document.querySelector("#robotPrSearch");
 const robotPrList = document.querySelector("#robotPrList");
 const robotPrDetails = document.querySelector("#robotPrDetails");
@@ -4206,6 +4208,7 @@ async function selectRobotOnlineAddress(address, { persist = true } = {}) {
 function closeRobotAddressMenu() {
   robotOnlineAddressMenu.hidden = true;
   robotOnlineAddressButton.setAttribute("aria-expanded", "false");
+  robotOnlineAddressChevron.textContent = "v";
 }
 
 function toggleRobotAddressMenu(forceOpen = null) {
@@ -4213,6 +4216,7 @@ function toggleRobotAddressMenu(forceOpen = null) {
   renderRobotOnlineAddressSelect();
   robotOnlineAddressMenu.hidden = !open;
   robotOnlineAddressButton.setAttribute("aria-expanded", String(open));
+  robotOnlineAddressChevron.textContent = open ? "^" : "v";
 }
 
 function goOffline() {
@@ -5554,6 +5558,17 @@ function selectedRobotPositionRegister() {
   return robotPositionRegisters.find((register) => robotPositionRegisterKey(register) === selectedRobotPositionRegisterKey) || null;
 }
 
+function robotPrEditsEnabled() {
+  return Boolean(robotPrEditToggle?.checked);
+}
+
+function applyRobotPrEditState() {
+  const disabled = !robotPrEditsEnabled();
+  robotPrDetails.querySelectorAll("#robotPrForm input, #robotPrForm select")
+    .forEach((field) => { field.disabled = disabled; });
+  updateRobotPositionRegisterDirtyState();
+}
+
 function renderRobotPositionRegisterList() {
   const query = robotPrSearch.value.trim().toLowerCase();
   const visible = robotPositionRegisters.filter((register) => {
@@ -5575,10 +5590,11 @@ function renderRobotPositionRegisterList() {
 }
 
 function robotPositionRegisterAxisFields(axes, values) {
+  const editsDisabled = robotPrEditsEnabled() ? "" : " disabled";
   return axes.map((axis) => `
     <label class="robot-pr-field">
       <span>${escapeHtml(axis)}</span>
-      <input type="number" step="any" data-pr-axis="${escapeHtml(axis)}" value="${escapeHtml(Number(values[axis] || 0).toFixed(3))}">
+      <input type="number" step="any" data-pr-axis="${escapeHtml(axis)}" value="${escapeHtml(Number(values[axis] || 0).toFixed(3))}"${editsDisabled}>
     </label>
   `).join("");
 }
@@ -5597,6 +5613,7 @@ function renderRobotPositionRegisterDetails() {
   const jointValues = draft.mode === "joint" ? draft.values : Object.fromEntries(jointAxes.map((axis) => [axis, 0]));
   const cartesianValues = draft.mode === "cartesian" ? draft.values : { X: 0, Y: 0, Z: 0, W: 0, P: 0, R: 0 };
   const sourceModeLabel = register.mode === "uninitialized" ? "Currently uninitialized" : `${register.mode === "joint" ? "Joint" : "Cartesian"} representation`;
+  const editsDisabled = robotPrEditsEnabled() ? "" : " disabled";
   robotPrDetails.classList.remove("muted-position");
   robotPrDetails.innerHTML = `
     <form id="robotPrForm" class="robot-pr-form">
@@ -5607,11 +5624,11 @@ function renderRobotPositionRegisterDetails() {
       <div class="robot-pr-fields">
         <label class="robot-pr-field robot-pr-field-wide">
           <span>Comment</span>
-          <input id="robotPrComment" type="text" maxlength="16" value="${escapeHtml(draft.comment)}">
+          <input id="robotPrComment" type="text" maxlength="16" value="${escapeHtml(draft.comment)}"${editsDisabled}>
         </label>
         <label class="robot-pr-field">
           <span>Representation</span>
-          <select id="robotPrMode">
+          <select id="robotPrMode"${editsDisabled}>
             <option value="cartesian" ${draft.mode === "cartesian" ? "selected" : ""}>Cartesian</option>
             <option value="joint" ${draft.mode === "joint" ? "selected" : ""}>Joint</option>
           </select>
@@ -5621,12 +5638,12 @@ function renderRobotPositionRegisterDetails() {
         <div class="robot-pr-axis-fields">${robotPositionRegisterAxisFields(["X", "Y", "Z", "W", "P", "R"], cartesianValues)}</div>
         <div class="robot-pr-config">
           <div class="robot-pr-config-label">Configuration</div>
-          <label class="robot-pr-field"><span>Flip</span><select id="robotPrFlip"><option value="N" ${config.flip === "N" ? "selected" : ""}>N</option><option value="F" ${config.flip === "F" ? "selected" : ""}>F</option></select></label>
-          <label class="robot-pr-field"><span>Up/Down</span><select id="robotPrUp"><option value="U" ${config.up === "U" ? "selected" : ""}>U</option><option value="D" ${config.up === "D" ? "selected" : ""}>D</option></select></label>
-          <label class="robot-pr-field"><span>Top/Bottom</span><select id="robotPrTop"><option value="T" ${config.top === "T" ? "selected" : ""}>T</option><option value="B" ${config.top === "B" ? "selected" : ""}>B</option></select></label>
-          <label class="robot-pr-field"><span>Turn 1</span><input id="robotPrTurn1" type="number" step="1" value="${config.turn1}"></label>
-          <label class="robot-pr-field"><span>Turn 2</span><input id="robotPrTurn2" type="number" step="1" value="${config.turn2}"></label>
-          <label class="robot-pr-field"><span>Turn 3</span><input id="robotPrTurn3" type="number" step="1" value="${config.turn3}"></label>
+          <label class="robot-pr-field"><span>Flip</span><select id="robotPrFlip"${editsDisabled}><option value="N" ${config.flip === "N" ? "selected" : ""}>N</option><option value="F" ${config.flip === "F" ? "selected" : ""}>F</option></select></label>
+          <label class="robot-pr-field"><span>Up/Down</span><select id="robotPrUp"${editsDisabled}><option value="U" ${config.up === "U" ? "selected" : ""}>U</option><option value="D" ${config.up === "D" ? "selected" : ""}>D</option></select></label>
+          <label class="robot-pr-field"><span>Top/Bottom</span><select id="robotPrTop"${editsDisabled}><option value="T" ${config.top === "T" ? "selected" : ""}>T</option><option value="B" ${config.top === "B" ? "selected" : ""}>B</option></select></label>
+          <label class="robot-pr-field"><span>Turn 1</span><input id="robotPrTurn1" type="number" step="1" value="${config.turn1}"${editsDisabled}></label>
+          <label class="robot-pr-field"><span>Turn 2</span><input id="robotPrTurn2" type="number" step="1" value="${config.turn2}"${editsDisabled}></label>
+          <label class="robot-pr-field"><span>Turn 3</span><input id="robotPrTurn3" type="number" step="1" value="${config.turn3}"${editsDisabled}></label>
         </div>
       </div>
       <div id="robotPrJointFields" class="robot-pr-mode-fields" ${draft.mode === "joint" ? "" : "hidden"}>
@@ -5679,8 +5696,10 @@ function updateRobotPositionRegisterDirtyState() {
     const current = collectRobotPositionRegisterForm();
     const baseline = editableRobotPositionRegister(register);
     const dirty = JSON.stringify(current) !== JSON.stringify(baseline);
-    commitButton.disabled = !dirty || robotPositionRegisterCommitActive || robotOnlineStatus !== "online";
-    dirtyStatus.textContent = dirty ? "Pending changes have not been written." : "No pending changes.";
+    commitButton.disabled = !robotPrEditsEnabled() || !dirty || robotPositionRegisterCommitActive || robotOnlineStatus !== "online";
+    dirtyStatus.textContent = robotPrEditsEnabled()
+      ? (dirty ? "Pending changes have not been written." : "No pending changes.")
+      : "Enable edits to change this Position Register.";
   } catch (error) {
     commitButton.disabled = true;
     dirtyStatus.textContent = error.message;
@@ -5733,6 +5752,7 @@ async function readRobotPositionRegisters({ force = false } = {}) {
 }
 
 async function commitRobotPositionRegister() {
+  if (!robotPrEditsEnabled()) return;
   if (robotPositionRegisterCommitActive) return;
   const register = collectRobotPositionRegisterForm();
   if (!register) return;
@@ -8993,6 +9013,13 @@ robotLivePrTab.addEventListener("click", () => {
   setLiveRobotTool("position-registers");
 });
 
+robotPrEditToggle.addEventListener("change", () => {
+  applyRobotPrEditState();
+  projectStatus.textContent = robotPrEditsEnabled()
+    ? "Position Register edits are enabled."
+    : "Position Register edits are disabled.";
+});
+
 robotPrSearch.addEventListener("input", renderRobotPositionRegisterList);
 
 robotPrList.addEventListener("click", (event) => {
@@ -9003,9 +9030,13 @@ robotPrList.addEventListener("click", (event) => {
   renderRobotPositionRegisterDetails();
 });
 
-robotPrDetails.addEventListener("input", updateRobotPositionRegisterDirtyState);
+robotPrDetails.addEventListener("input", (event) => {
+  if (event.target.closest("#robotPrForm") && !robotPrEditsEnabled()) return;
+  updateRobotPositionRegisterDirtyState();
+});
 
 robotPrDetails.addEventListener("change", (event) => {
+  if (event.target.closest("#robotPrForm") && !robotPrEditsEnabled()) return;
   if (event.target.id === "robotPrMode") {
     const cartesianFields = document.querySelector("#robotPrCartesianFields");
     const jointFields = document.querySelector("#robotPrJointFields");
@@ -9019,6 +9050,7 @@ robotPrDetails.addEventListener("change", (event) => {
 robotPrDetails.addEventListener("submit", (event) => {
   if (event.target.id !== "robotPrForm") return;
   event.preventDefault();
+  if (!robotPrEditsEnabled()) return;
   commitRobotPositionRegister().catch(() => {});
 });
 

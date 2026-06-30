@@ -50,7 +50,7 @@
               <div class="robot-address-picker">
                 <button id="robotOnlineAddressButton" class="go-online-select" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose a saved robot">
                   <span id="robotOnlineAddressButtonText">No robot IP</span>
-                  <span aria-hidden="true">v</span>
+                  <span id="robotOnlineAddressChevron" aria-hidden="true">v</span>
                 </button>
                 <div id="robotOnlineAddressMenu" class="robot-address-menu" role="menu" hidden></div>
               </div>
@@ -701,7 +701,13 @@
                   <span class="eyebrow">Controller Data</span>
                   <h3 id="robotPrHeading">Position Registers</h3>
                 </div>
-                <div id="robotPrStatus" class="assignment-status">Go Online to load Position Registers.</div>
+                <div class="robot-pr-header-tools">
+                  <label class="robot-register-edit-toggle" title="Allow live edits to Position Registers">
+                    <input id="robotPrEditToggle" type="checkbox">
+                    <span>Enable Edits</span>
+                  </label>
+                  <div id="robotPrStatus" class="assignment-status">Go Online to load Position Registers.</div>
+                </div>
               </div>
               <div class="robot-pr-browser">
                 <div class="robot-pr-list-panel">
