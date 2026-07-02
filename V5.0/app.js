@@ -262,6 +262,7 @@ const robotOnlineAddressKey = "robo-programmer-online-robot-address";
 const robotOnlineAddressListKey = "robo-programmer-online-robot-addresses";
 const robotOnlineAddressProfilesKey = "robo-programmer-online-robot-profiles";
 const robotOnlinePollMs = 5000;
+const liveRobotOfflineMessage = "Go online with Robot for Data.";
 
 function savedEditorFontSize() {
   const stored = Number(localStorage.getItem(editorFontSizeKey));
@@ -3296,15 +3297,11 @@ function refreshEditorAfterAssignmentChange(textarea, lsFile, showHeader, showFo
 
 function setWorkspaceView(view) {
   activeWorkspaceView = ["assignments", "robot-export", "robot-backup", "robot-position"].includes(view) ? view : "editor";
-  if (activeWorkspaceView === "robot-position" && robotOnlineStatus !== "online") {
-    activeWorkspaceView = "editor";
-  }
   editorWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "editor"));
   assignmentsWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "assignments"));
   robotExportWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "robot-export"));
   robotBackupWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "robot-backup"));
   robotPositionWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "robot-position"));
-  robotPositionWorkspaceTab.hidden = robotOnlineStatus !== "online";
 
   if (!project) {
     startScreen.hidden = false;
@@ -3329,6 +3326,8 @@ function setWorkspaceView(view) {
     loadAssignmentsView();
   } else if (activeWorkspaceView === "robot-export") {
     renderRobotExportPrograms();
+  } else if (activeWorkspaceView === "robot-position" && robotOnlineStatus !== "online") {
+    resetRobotPositionDisplay();
   }
 }
 function updateProjectActionVisibility() {
@@ -4162,11 +4161,8 @@ function setRobotOnlineUi(status, message = "") {
   };
   goOnlineLabel.textContent = labels[status] || "Go Online";
   goOnlineBtn.title = message || (robotOnlineAddress ? `Robot: ${robotOnlineAddress}` : "Connect to a robot");
-  robotPositionWorkspaceTab.hidden = status !== "online";
   updateLoadLsFromRobotButton();
-  if (status !== "online" && activeWorkspaceView === "robot-position") {
-    setWorkspaceView("editor");
-  }
+  if (status !== "online" && activeWorkspaceView === "robot-position") resetRobotPositionDisplay();
   renderRobotOnlineAddressSelect();
 }
 
@@ -4897,16 +4893,16 @@ function robotExtAxisPairs(extAxes = []) {
 function resetRobotPositionDisplay() {
   stopRobotPositionLive();
   robotPositionRequestActive = false;
-  robotPositionStatus.textContent = "Go Online to load live robot data.";
+  robotPositionStatus.textContent = liveRobotOfflineMessage;
   robotPositionSummary.textContent = "";
   robotPositionJoints.classList.add("muted-position");
   robotPositionUserFrame.classList.add("muted-position");
   robotPositionWorld.classList.add("muted-position");
-  robotPositionJoints.textContent = "No joint data yet.";
-  robotPositionUserFrame.textContent = "No user-frame data yet.";
-  robotPositionWorld.textContent = "No world data yet.";
+  robotPositionJoints.textContent = liveRobotOfflineMessage;
+  robotPositionUserFrame.textContent = liveRobotOfflineMessage;
+  robotPositionWorld.textContent = liveRobotOfflineMessage;
   liveRobotAlarms.classList.add("muted-position");
-  liveRobotAlarms.textContent = "Go Online to load alarms.";
+  liveRobotAlarms.textContent = liveRobotOfflineMessage;
   resetRobotPositionRegisters();
   resetRobotNumericRegisters();
   resetRobotFlags();
@@ -5047,14 +5043,14 @@ function robotProgramHistoryTime(value) {
 
 function resetRobotProgramMonitor() {
   robotProgramMonitorRequestActive = false;
-  robotProgramMonitorStatus.textContent = "Open this tab while online to monitor program execution.";
+  robotProgramMonitorStatus.textContent = liveRobotOfflineMessage;
   robotProgramMonitorHero.classList.add("muted-position");
-  robotProgramMonitorHero.textContent = "Waiting for live program data.";
+  robotProgramMonitorHero.textContent = liveRobotOfflineMessage;
   robotProgramTaskCount.textContent = "0 tasks";
   robotProgramTaskList.classList.add("muted-position");
-  robotProgramTaskList.textContent = "No task data yet.";
+  robotProgramTaskList.textContent = liveRobotOfflineMessage;
   robotProgramSource.classList.add("muted-position");
-  robotProgramSource.textContent = "Source context appears when a TP task is available.";
+  robotProgramSource.textContent = liveRobotOfflineMessage;
 }
 
 function renderRobotProgramMonitor(snapshot = {}) {
@@ -5198,14 +5194,14 @@ function resetRobotNumericRegisters() {
   robotNumericRegistersAddress = "";
   robotNumericRegistersLoading = false;
   robotNumericRegistersUpdatedAt = "";
-  robotNumericTableWrap.innerHTML = "";
+  robotNumericTableWrap.innerHTML = `<div class="assignment-empty">${liveRobotOfflineMessage}</div>`;
 }
 
 function resetRobotFlags() {
   robotFlags = [];
   robotFlagsAddress = "";
   robotFlagsLoading = false;
-  robotFlagTableWrap.innerHTML = "";
+  robotFlagTableWrap.innerHTML = `<div class="assignment-empty">${liveRobotOfflineMessage}</div>`;
 }
 
 function renderRobotNumericRegisters() {
@@ -5715,8 +5711,8 @@ function resetRobotPositionRegisters() {
   robotPrSearch.value = "";
   robotPrList.innerHTML = "";
   robotPrDetails.classList.add("muted-position");
-  robotPrDetails.textContent = "Go Online to load Position Registers.";
-  robotPrStatus.textContent = "Go Online to load Position Registers.";
+  robotPrDetails.textContent = liveRobotOfflineMessage;
+  robotPrStatus.textContent = liveRobotOfflineMessage;
 }
 
 async function readRobotPositionRegisters({ force = false } = {}) {

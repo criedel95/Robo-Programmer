@@ -62,7 +62,7 @@
               <button id="assignmentsWorkspaceTab" type="button" aria-pressed="false" title="Open the project Data Assignments workbook editor.">Data Assignments</button>
               <button id="robotExportWorkspaceTab" type="button" aria-pressed="false">Robot Edits</button>
               <button id="robotBackupWorkspaceTab" type="button" aria-pressed="false" title="Back up selected files from the online robot into the project.">Robot Backup</button>
-              <button id="robotPositionWorkspaceTab" type="button" aria-pressed="false" hidden title="View live robot activity, alarms, and register data.">Live Robot</button>
+              <button id="robotPositionWorkspaceTab" type="button" aria-pressed="false" title="View live robot activity, alarms, and register data.">Live Robot</button>
             </nav>
           </div>
         </header>
@@ -612,24 +612,24 @@
                 <button id="startRobotPositionBtn" type="button" hidden title="Start repeatedly refreshing live robot position data.">Start Live Updates</button>
                 <button id="stopRobotPositionBtn" type="button" disabled hidden title="Stop manual live robot position updates.">Stop</button>
               </div>
-              <div id="robotPositionStatus" class="assignment-status">Go Online to load live robot data.</div>
+              <div id="robotPositionStatus" class="assignment-status">Go online with Robot for Data.</div>
               <div id="robotPositionSummary" class="robot-position-summary"></div>
               <div class="robot-position-grid">
                 <section class="robot-position-card">
                   <h3>Joint Position</h3>
-                  <div id="robotPositionJoints" class="robot-position-values muted-position">No joint data yet.</div>
+                  <div id="robotPositionJoints" class="robot-position-values muted-position">Go online with Robot for Data.</div>
                 </section>
                 <section class="robot-position-card">
                   <h3>Current User Frame Position</h3>
-                  <div id="robotPositionUserFrame" class="robot-position-values muted-position">No user-frame data yet.</div>
+                  <div id="robotPositionUserFrame" class="robot-position-values muted-position">Go online with Robot for Data.</div>
                 </section>
                 <section class="robot-position-card">
                   <h3>World Position</h3>
-                  <div id="robotPositionWorld" class="robot-position-values muted-position">No world data yet.</div>
+                  <div id="robotPositionWorld" class="robot-position-values muted-position">Go online with Robot for Data.</div>
                 </section>
                 <section class="robot-position-card live-robot-alarm-card">
                   <h3>Active Alarms</h3>
-                  <div id="liveRobotAlarms" class="robot-position-values muted-position">Go Online to load alarms.</div>
+                  <div id="liveRobotAlarms" class="robot-position-values muted-position">Go online with Robot for Data.</div>
                 </section>
               </div>
             </section>
@@ -641,9 +641,9 @@
                   <span class="eyebrow">Read-only Execution Data</span>
                   <h3 id="robotProgramMonitorHeading">Live Program Monitor</h3>
                 </div>
-                <div id="robotProgramMonitorStatus" class="assignment-status">Open this tab while online to monitor program execution.</div>
+                <div id="robotProgramMonitorStatus" class="assignment-status">Go online with Robot for Data.</div>
               </header>
-              <div id="robotProgramMonitorHero" class="robot-program-monitor-hero muted-position">Waiting for live program data.</div>
+              <div id="robotProgramMonitorHero" class="robot-program-monitor-hero muted-position">Go online with Robot for Data.</div>
               <div class="robot-program-monitor-grid">
                 <section class="robot-program-monitor-card robot-program-task-card">
                   <div class="robot-program-monitor-card-heading">
@@ -653,7 +653,7 @@
                     </div>
                     <span id="robotProgramTaskCount" class="robot-program-monitor-count">0 tasks</span>
                   </div>
-                  <div id="robotProgramTaskList" class="robot-program-task-list muted-position">No task data yet.</div>
+                  <div id="robotProgramTaskList" class="robot-program-task-list muted-position">Go online with Robot for Data.</div>
                 </section>
                 <section class="robot-program-monitor-card robot-program-source-card">
                   <div class="robot-program-monitor-card-heading">
@@ -662,7 +662,7 @@
                       <h3>Program Source</h3>
                     </div>
                   </div>
-                  <div id="robotProgramSource" class="robot-program-source muted-position">Source context appears when a TP task is available.</div>
+                  <div id="robotProgramSource" class="robot-program-source muted-position">Go online with Robot for Data.</div>
                 </section>
               </div>
             </section>
@@ -685,11 +685,11 @@
               <div class="robot-registers-flags-grid">
                 <section class="robot-registers-flags-column" aria-label="Numeric Registers">
                   <h4>Numeric Registers</h4>
-                  <div id="robotNumericTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"></div>
+                  <div id="robotNumericTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"><div class="assignment-empty">Go online with Robot for Data.</div></div>
                 </section>
                 <section class="robot-registers-flags-column" aria-label="Flags">
                   <h4>Flags</h4>
-                  <div id="robotFlagTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"></div>
+                  <div id="robotFlagTableWrap" class="robot-comments-table-wrap robot-numeric-table-wrap"><div class="assignment-empty">Go online with Robot for Data.</div></div>
                 </section>
               </div>
             </section>
@@ -706,7 +706,7 @@
                     <input id="robotPrEditToggle" type="checkbox">
                     <span>Enable Edits</span>
                   </label>
-                  <div id="robotPrStatus" class="assignment-status">Go Online to load Position Registers.</div>
+                  <div id="robotPrStatus" class="assignment-status">Go online with Robot for Data.</div>
                 </div>
               </div>
               <div class="robot-pr-browser">
@@ -717,7 +717,7 @@
                   </label>
                   <div id="robotPrList" class="robot-pr-list" role="listbox" aria-label="Online Position Registers"></div>
                 </div>
-                <div id="robotPrDetails" class="robot-pr-details muted-position">Go Online to load Position Registers.</div>
+                <div id="robotPrDetails" class="robot-pr-details muted-position">Go online with Robot for Data.</div>
               </div>
             </section>
           </div>
