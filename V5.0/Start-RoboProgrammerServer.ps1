@@ -155,11 +155,21 @@ function Send-RobotFtpFile {
   $response.Dispose()
 }
 
+function Ensure-LsEndTrailingBlankLine {
+  param([string]$Content)
+
+  return ([regex]::Replace(
+    ($Content -replace "`r?`n", "`n"),
+    "(?is)(^|`n)\s*/END\s*(?:`n\s*)*$",
+    "`$1/END`n"
+  ) -replace "`n", "`r`n")
+}
+
 function ConvertTo-RobotCompatibleLs {
   param([string]$Content)
 
   $updates = @()
-  $compatibleContent = $Content -replace "`r?`n", "`r`n"
+  $compatibleContent = Ensure-LsEndTrailingBlankLine $Content
   if ($compatibleContent -notmatch "(?im)^\s*TCD:\s+STACK_SIZE") {
     $programName = [regex]::Match($compatibleContent, "(?im)^\s*/PROG\s+([A-Z][A-Z0-9_]*)\s*$").Groups[1].Value
     $lineCount = [regex]::Match($compatibleContent, "(?im)^\s*LINE_COUNT\s*=\s*(\d+)\s*;").Groups[1].Value
@@ -196,7 +206,7 @@ function ConvertTo-RobotCompatibleLs {
     $compatibleContent = [regex]::Replace($compatibleContent, "(?im)^\s*/MN\s*$", "$appl/MN", 1)
     $updates += "Added the /APPL compatibility header required by the target controller."
   }
-  if (-not $compatibleContent.EndsWith("`r`n")) { $compatibleContent += "`r`n" }
+  $compatibleContent = Ensure-LsEndTrailingBlankLine $compatibleContent
 
   return @{
     content = $compatibleContent

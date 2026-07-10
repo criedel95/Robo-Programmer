@@ -115,7 +115,6 @@ const robotAddressInput = document.querySelector("#robotAddressInput");
 const rememberRobotAddress = document.querySelector("#rememberRobotAddress");
 const compareRobotCommentsBtn = document.querySelector("#compareRobotCommentsBtn");
 const pushRobotCommentsBtn = document.querySelector("#pushRobotCommentsBtn");
-const importRobotCommentsBtn = document.querySelector("#importRobotCommentsBtn");
 const robotCommentsStatus = document.querySelector("#robotCommentsStatus");
 const robotCommentTypeFilter = document.querySelector("#robotCommentTypeFilter");
 const robotCommentDifferenceFilter = document.querySelector("#robotCommentDifferenceFilter");
@@ -263,7 +262,6 @@ const robotOnlineAddressKey = "robo-programmer-online-robot-address";
 const robotOnlineAddressListKey = "robo-programmer-online-robot-addresses";
 const robotOnlineAddressProfilesKey = "robo-programmer-online-robot-profiles";
 const robotOnlinePollMs = 5000;
-const liveRobotOfflineMessage = "Go online with Robot for Data.";
 
 function savedEditorFontSize() {
   const stored = Number(localStorage.getItem(editorFontSizeKey));
@@ -526,7 +524,6 @@ function enforceRobotOnlineActionState() {
     clearRobotExportBtn,
     compareRobotCommentsBtn,
     pushRobotCommentsBtn,
-    importRobotCommentsBtn,
     selectVisibleRobotCommentsBtn,
     clearVisibleRobotCommentsBtn,
     inventoryRobotBackupBtn,
@@ -623,14 +620,9 @@ function assignmentSheetLabel(sheetName) {
   return sheetName === "PR" ? "Position Registers" : sheetName;
 }
 
-function ensureLsEndTrailingBlankLine(content) {
-  const text = String(content ?? "").replace(/\r\n/g, "\n");
-  return text.replace(/(^|\n)\s*\/END\s*(?:\n\s*)*$/i, "$1/END\n");
-}
-
 function createProgramTemplate(name) {
   const programName = name.toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 30) || "MAIN";
-  return ensureLsEndTrailingBlankLine(`/PROG  ${programName}
+  return `/PROG  ${programName}
 /ATTR
 OWNER		= MNEDITOR;
 COMMENT		= "";
@@ -662,7 +654,7 @@ AUTO_SINGULARITY_HEADER;
    3:  !Add robot logic here ;
 /POS
 /END
-`);
+`;
 }
 
 function normalizeLsFileName(name) {
@@ -737,33 +729,33 @@ function requestedProjectName() {
   return new URLSearchParams(window.location.search).get("project");
 }
 
-function normalizeWindowsPath(path) {
-  return String(path || "").trim().replaceAll("/", "\\").replace(/\\+$/g, "");
+function normalizeSystemPath(path) {
+  return String(path || "").trim().replaceAll("\\", "/").replace(/\/+$/g, "");
 }
 
-function windowsPathBaseName(path) {
-  const normalized = normalizeWindowsPath(path);
-  return normalized ? normalized.split("\\").filter(Boolean).at(-1) || "" : "";
+function systemPathBaseName(path) {
+  const normalized = normalizeSystemPath(path);
+  return normalized ? normalized.split("/").filter(Boolean).at(-1) || "" : "";
 }
 
 function requestedProjectRootPath() {
-  return normalizeWindowsPath(new URLSearchParams(window.location.search).get("projectRoot"));
+  return normalizeSystemPath(new URLSearchParams(window.location.search).get("projectRoot"));
 }
 
 function trustedProjectRootPath(directoryHandle) {
   const rootPath = requestedProjectRootPath();
   if (!rootPath || !directoryHandle?.name) return "";
-  return windowsPathBaseName(rootPath).toUpperCase() === directoryHandle.name.toUpperCase()
+  return systemPathBaseName(rootPath).toUpperCase() === directoryHandle.name.toUpperCase()
     ? rootPath
     : "";
 }
 
-function currentLsFileWindowsPath() {
+function currentLsFileSystemPath() {
   const file = getCurrentFile();
-  const rootPath = normalizeWindowsPath(project?.projectRootPath);
+  const rootPath = normalizeSystemPath(project?.projectRootPath);
   if (!file || !rootPath) return "";
   const lsFolder = project?.lsDirectoryHandle === project?.directoryHandle ? "" : "LS Files";
-  return [rootPath, lsFolder, file.name].filter(Boolean).join("\\");
+  return [rootPath, lsFolder, file.name].filter(Boolean).join("/");
 }
 
 function projectRootCacheKey(projectName) {
@@ -772,14 +764,14 @@ function projectRootCacheKey(projectName) {
 
 function cachedProjectRootPath(projectName) {
   try {
-    return normalizeWindowsPath(localStorage.getItem(projectRootCacheKey(projectName)));
+    return normalizeSystemPath(localStorage.getItem(projectRootCacheKey(projectName)));
   } catch {
     return "";
   }
 }
 
 function cacheProjectRootPath(projectName, rootPath) {
-  const normalized = normalizeWindowsPath(rootPath);
+  const normalized = normalizeSystemPath(rootPath);
   if (!normalized) return;
   try {
     localStorage.setItem(projectRootCacheKey(projectName), normalized);
@@ -799,7 +791,7 @@ async function resolveProjectRootPath(projectName, files) {
     });
     if (!response.ok) return "";
     const result = await response.json();
-    return result?.ok && result.path ? normalizeWindowsPath(result.path) : "";
+    return result?.ok && result.path ? normalizeSystemPath(result.path) : "";
   } catch {
     return "";
   }
@@ -1428,7 +1420,7 @@ async function migrateProjectConfig(directoryHandle, metadata) {
   try {
     const structure = await ensureCurrentProjectStructure(directoryHandle);
     changes.push(...structure.changes);
-    const launcherName = `Launch ${safeFolderName(directoryHandle.name)}.cmd`;
+    const launcherName = `Launch ${safeFolderName(directoryHandle.name)}.command`;
     const needsConfigUpgrade = metadata.configVersion < currentProjectConfigVersion
       || metadata.data?.roboProgrammerVersion !== currentRoboProgrammerVersion
       || !metadata.manifestFileName;
@@ -1464,7 +1456,7 @@ async function migrateProjectConfig(directoryHandle, metadata) {
 
 async function writeProjectFiles(directoryHandle, name, favoriteFiles = [], existingData = {}, layout = {}) {
   await writeTextFile(directoryHandle, `${safeFolderName(name)}.roboproject`, createProjectManifest(name, favoriteFiles, existingData, layout));
-  await writeTextFile(directoryHandle, `Launch ${safeFolderName(name)}.cmd`, createProjectLauncher(name));
+  await writeTextFile(directoryHandle, `Launch ${safeFolderName(name)}.command`, createProjectLauncher(name));
 }
 
 async function persistProjectFavorites() {
@@ -1524,28 +1516,22 @@ function createProjectLauncher(name) {
   const port = new URL(window.location.href).port || "4220";
   const encodedAppRoot = encodeURIComponent(appRootPath);
   const encodedProject = encodeURIComponent(name);
-  return `@echo off
-setlocal
+  return `#!/bin/zsh
+APP_ROOT="${appRootPath.replaceAll('"', '\\"')}"
+PORT="${port}"
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-set "APP_ROOT=${appRootPath}"
-set "PORT=${port}"
-set "PROJECT_ROOT=%~dp0"
-if "%PROJECT_ROOT:~-1%"=="\\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
+if [ ! -f "$APP_ROOT/server.mjs" ]; then
+  echo "Robo Programmer could not find server.mjs in:"
+  echo "$APP_ROOT"
+  echo
+  echo "Move this project launcher next to a valid Robo Programmer Mac test build, or recreate it from the app."
+  read "?Press Return to close."
+  exit 1
+fi
 
-if not exist "%APP_ROOT%\\Start-RoboProgrammerServer.ps1" (
-  echo Robo Programmer could not find Start-RoboProgrammerServer.ps1 in:
-  echo %APP_ROOT%
-  echo.
-  echo Move this project launcher next to a valid Robo Programmer V5.0 install, or recreate it from the app.
-  pause
-  exit /b 1
-)
-
-for /f "usebackq delims=" %%I in (\`powershell -NoProfile -Command "[uri]::EscapeDataString($env:PROJECT_ROOT)"\`) do set "ENCODED_PROJECT_ROOT=%%I"
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\\Start-RoboProgrammerServer.ps1" -Port %PORT% -Path "/?project=${encodedProject}&appRoot=${encodedAppRoot}&projectRoot=%ENCODED_PROJECT_ROOT%"
-
-endlocal
+ENCODED_PROJECT_ROOT="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$PROJECT_ROOT")"
+node "$APP_ROOT/server.mjs" --port "$PORT" --path "/?project=${encodedProject}&appRoot=${encodedAppRoot}&projectRoot=$ENCODED_PROJECT_ROOT"
 `;
 }
 
@@ -1579,7 +1565,6 @@ async function saveFileToDisk(file) {
 
   if (!file?.handle?.createWritable) return false;
 
-  file.content = ensureLsEndTrailingBlankLine(file.content);
   const writable = await file.handle.createWritable();
   await writable.write(file.content);
   await writable.close();
@@ -1706,11 +1691,11 @@ function updateCopyCurrentPathButton() {
   if (!file) {
     copyCurrentPathBtn.title = "Select an LS file before copying its path.";
   } else if (project?.projectRootPath) {
-    copyCurrentPathBtn.title = `Copy the Windows path for ${file.name}`;
+    copyCurrentPathBtn.title = `Copy the Mac path for ${file.name}`;
   } else if (project?.pathResolvePending) {
-    copyCurrentPathBtn.title = "Robo Programmer is still resolving this project's Windows path.";
+    copyCurrentPathBtn.title = "Robo Programmer is still resolving this project's Mac path.";
   } else {
-    copyCurrentPathBtn.title = "Robo Programmer could not resolve this project's full Windows path.";
+    copyCurrentPathBtn.title = "Robo Programmer could not resolve this project's full Mac path.";
   }
 }
 
@@ -1720,21 +1705,21 @@ async function copyCurrentLsPath() {
     updateCopyCurrentPathButton();
     return;
   }
-  let filePath = currentLsFileWindowsPath();
+  let filePath = currentLsFileSystemPath();
   if (!filePath) {
-    projectStatus.textContent = "Resolving this project's Windows path...";
+    projectStatus.textContent = "Resolving this project's Mac path...";
     const rootPath = await resolveProjectRootPath(project.name, project.files);
     if (rootPath) {
       project.projectRootPath = rootPath;
       project.pathResolvePending = false;
       cacheProjectRootPath(project.name, rootPath);
       updateCopyCurrentPathButton();
-      filePath = currentLsFileWindowsPath();
+      filePath = currentLsFileSystemPath();
     }
     if (!filePath) {
       projectStatus.textContent = project?.pathResolvePending
-        ? "Robo Programmer is still resolving this project's Windows path. Try Copy Path again in a moment."
-        : "Robo Programmer could not resolve this project's full Windows path. Open it from its generated launcher, then reconnect the project folder if prompted.";
+        ? "Robo Programmer is still resolving this project's Mac path. Try Copy Path again in a moment."
+        : "Robo Programmer could not resolve this project's full Mac path. Open it from its generated launcher, then reconnect the project folder if prompted.";
       return;
     }
   }
@@ -2172,7 +2157,6 @@ function closeProject() {
   resetRobotCommentTypeFilter();
   robotCommentsStatus.textContent = "Go Online before comparing robot comments.";
   setRobotOnlineActionState(pushRobotCommentsBtn, true);
-  setRobotOnlineActionState(importRobotCommentsBtn, true);
   updateAssignmentPathDisplay();
   clearActiveSessionSnapshot();
   renderHighlight();
@@ -2213,7 +2197,6 @@ function loadProject(nextProject) {
   resetRobotCommentTypeFilter();
   robotCommentsStatus.textContent = "Go Online before comparing robot comments.";
   setRobotOnlineActionState(pushRobotCommentsBtn, true);
-  setRobotOnlineActionState(importRobotCommentsBtn, true);
   setSplitEditorOpen(false);
   startScreen.hidden = true;
   activeWorkspaceView = "editor";
@@ -3005,7 +2988,7 @@ function restoreSourceTagDisplay(source, displayedContent, previousDisplayedCont
 }
 
 function mergeDisplayedContent(source, displayedContent, showHeader = headerVisible, showFooter = footerVisible, previousDisplayedContent = "") {
-  return ensureLsEndTrailingBlankLine(restoreSourceTagDisplay(source, mergeVisibleContent(source, displayedContent, showHeader, showFooter), previousDisplayedContent));
+  return restoreSourceTagDisplay(source, mergeVisibleContent(source, displayedContent, showHeader, showFooter), previousDisplayedContent);
 }
 
 function updateTagDisplayPreferenceAssignment(lsFile, key, description) {
@@ -3307,11 +3290,15 @@ function refreshEditorAfterAssignmentChange(textarea, lsFile, showHeader, showFo
 
 function setWorkspaceView(view) {
   activeWorkspaceView = ["assignments", "robot-export", "robot-backup", "robot-position"].includes(view) ? view : "editor";
+  if (activeWorkspaceView === "robot-position" && robotOnlineStatus !== "online") {
+    activeWorkspaceView = "editor";
+  }
   editorWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "editor"));
   assignmentsWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "assignments"));
   robotExportWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "robot-export"));
   robotBackupWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "robot-backup"));
   robotPositionWorkspaceTab.setAttribute("aria-pressed", String(activeWorkspaceView === "robot-position"));
+  robotPositionWorkspaceTab.hidden = robotOnlineStatus !== "online";
 
   if (!project) {
     startScreen.hidden = false;
@@ -3336,8 +3323,6 @@ function setWorkspaceView(view) {
     loadAssignmentsView();
   } else if (activeWorkspaceView === "robot-export") {
     renderRobotExportPrograms();
-  } else if (activeWorkspaceView === "robot-position" && robotOnlineStatus !== "online") {
-    resetRobotPositionDisplay();
   }
 }
 function updateProjectActionVisibility() {
@@ -3817,10 +3802,6 @@ function robotCommentIsPushable(item) {
   return Boolean(item?.different) && !String(item?.status || "").startsWith("Too long");
 }
 
-function robotCommentIsImportable(item) {
-  return Boolean(item?.different);
-}
-
 function resetRobotCommentTypeFilter() {
   robotCommentTypeFilterValue = "all";
   robotCommentDifferenceFilterValue = "all";
@@ -3857,8 +3838,6 @@ function renderRobotCommentComparison() {
   const differences = robotCommentComparison.filter((item) => item.different).length;
   const pushable = robotCommentComparison.filter(robotCommentIsPushable);
   const selectedChanges = robotCommentComparison.filter((item) => item.selected && robotCommentIsPushable(item));
-  const importable = robotCommentComparison.filter(robotCommentIsImportable);
-  const selectedImports = robotCommentComparison.filter((item) => item.selected && robotCommentIsImportable(item));
   const matching = robotCommentComparison.filter((item) => item.status === "Matches").length;
   const clears = robotCommentComparison.filter((item) => item.status === "Clear robot").length;
   const invalid = robotCommentComparison.filter((item) => item.status.startsWith("Too long")).length;
@@ -3869,22 +3848,21 @@ function renderRobotCommentComparison() {
   const filterMessage = activeFilters.length
     ? ` Showing ${visibleComparison.length} row${visibleComparison.length === 1 ? "" : "s"} for ${activeFilters.join(" and ")}.`
     : "";
-  const visibleSelected = visibleComparison.filter(({ item }) => item.selected && item.different);
-  robotCommentsSummary.textContent = `${differences} difference${differences === 1 ? "" : "s"} (${pushable.length} pushable, ${importable.length} importable, ${clears} clear${clears === 1 ? "" : "s"}), ${matching} matching, ${invalid} over-length.${filterMessage}`;
+  const visibleSelected = visibleComparison.filter(({ item }) => item.selected && robotCommentIsPushable(item));
+  robotCommentsSummary.textContent = `${differences} difference${differences === 1 ? "" : "s"} (${pushable.length} pushable, ${clears} clear${clears === 1 ? "" : "s"}), ${matching} matching, ${invalid} over-length.${filterMessage}`;
   const robotOnline = robotOnlineStatus === "online";
   setRobotOnlineActionState(pushRobotCommentsBtn, !robotOnline || selectedChanges.length === 0);
-  setRobotOnlineActionState(importRobotCommentsBtn, !robotOnline || selectedImports.length === 0);
   setRobotOnlineActionState(selectVisibleRobotCommentsBtn, !robotOnline || visibleComparison.length === 0);
   setRobotOnlineActionState(clearVisibleRobotCommentsBtn, !robotOnline || visibleSelected.length === 0);
   robotCommentsTableWrap.innerHTML = robotCommentComparison.length ? visibleComparison.length ? `
     <table class="robot-comments-table">
       <thead>
-        <tr><th>Select</th><th>Assignment</th><th>Spreadsheet</th><th>Robot</th><th>Status</th></tr>
+        <tr><th>Push</th><th>Assignment</th><th>Spreadsheet</th><th>Robot</th><th>Status</th></tr>
       </thead>
       <tbody>
         ${visibleComparison.map(({ item, index }) => `
           <tr class="${robotCommentIsPushable(item) ? "robot-comment-change" : ""}">
-            <td><input type="checkbox" data-robot-comment-index="${index}" aria-label="Select ${escapeHtml(`${item.type}[${item.index}]`)}" ${item.selected ? "checked" : ""} ${item.different ? "" : "disabled"}></td>
+            <td><input type="checkbox" data-robot-comment-index="${index}" aria-label="Push ${escapeHtml(`${item.type}[${item.index}]`)}" ${item.selected ? "checked" : ""} ${robotCommentIsPushable(item) ? "" : "disabled"}></td>
             <td>${escapeHtml(`${item.type}[${item.index}]`)}</td>
             <td>${escapeHtml(item.spreadsheetComment || "(blank)")}</td>
             <td>${escapeHtml(item.robotComment || "(blank)")}</td>
@@ -3904,7 +3882,6 @@ async function compareRobotComments() {
   const robotOrigin = requireOnlineRobot("compare robot comments");
   compareRobotCommentsBtn.disabled = true;
   pushRobotCommentsBtn.disabled = true;
-  importRobotCommentsBtn.disabled = true;
   robotCommentsStatus.textContent = `Connecting to ${robotOrigin} and reading supported comments...`;
   try {
     const robotComments = await readRobotComments(robotOrigin);
@@ -3913,7 +3890,7 @@ async function compareRobotComments() {
     robotCommentDifferenceFilterValue = "all";
     renderRobotCommentComparison();
 
-    robotCommentsStatus.textContent = `Connected to ${robotOrigin}. Review the comparison before pushing or importing selected comments.`;
+    robotCommentsStatus.textContent = `Connected to ${robotOrigin}. Review the comparison before pushing selected comments.`;
   } finally {
     setRobotOnlineActionState(compareRobotCommentsBtn, robotOnlineStatus !== "online");
   }
@@ -3931,7 +3908,6 @@ async function pushSelectedRobotComments() {
 
   compareRobotCommentsBtn.disabled = true;
   pushRobotCommentsBtn.disabled = true;
-  importRobotCommentsBtn.disabled = true;
   const failures = [];
   for (let index = 0; index < selected.length; index += 1) {
     const item = selected[index];
@@ -3971,58 +3947,6 @@ async function pushSelectedRobotComments() {
       return `${item.type}[${item.index}] expected "${item.spreadsheetComment}", robot has "${actual}"`;
     }).join("; ") || "none"}.`
     : `Pushed and verified ${selected.length} robot comment${selected.length === 1 ? "" : "s"}.`;
-}
-
-async function importSelectedRobotComments() {
-  if (!project) throw new Error("Open a project before importing robot comments.");
-  if (!assignmentWorkbookData) await loadAssignmentsView(true);
-  if (!assignmentWorkbookData) throw new Error("Data Assignments.xlsx could not be loaded.");
-  const selected = robotCommentComparison.filter((item) => item.selected && robotCommentIsImportable(item));
-  if (!selected.length) return;
-  const shouldImport = confirm(`Import ${selected.length} selected robot comment${selected.length === 1 ? "" : "s"} into Robo Programmer?\n\nThis updates Data Assignments.xlsx and matching LS references in the current project.`);
-  if (!shouldImport) {
-    robotCommentsStatus.textContent = "Robot comment import cancelled.";
-    return;
-  }
-
-  compareRobotCommentsBtn.disabled = true;
-  pushRobotCommentsBtn.disabled = true;
-  importRobotCommentsBtn.disabled = true;
-  const visibleEdits = collectVisibleAssignmentEdits();
-  let updatedFileCount = 0;
-  visibleEdits.changedKeys.forEach((key) => {
-    const [type, indexText] = key.split(":");
-    const cell = assignmentWorkbookData.assignmentCells.get(key);
-    updatedFileCount += syncAssignmentChangeToLsFiles(type, Number(indexText), cell?.description || "");
-  });
-
-  let workbookChanged = visibleEdits.count > 0;
-  const importedKeys = new Set();
-  selected.forEach((item, index) => {
-    robotCommentsStatus.textContent = `Importing ${index + 1} of ${selected.length}: ${item.type}[${item.index}]...`;
-    const cleaned = cleanAssignmentName(item.robotComment || "");
-    if (setAssignmentWorkbookDescription(item.type, item.index, cleaned)) workbookChanged = true;
-    updatedFileCount += syncAssignmentChangeToLsFiles(item.type, item.index, cleaned);
-    importedKeys.add(assignmentKey(item.type, item.index));
-  });
-
-  if (workbookChanged) await writeAssignmentWorkbookData();
-  if (activeWorkspaceView === "assignments") renderAssignmentsTable();
-  const robotComments = new Map(robotCommentComparison.map((item) => [assignmentKey(item.type, item.index), {
-    type: item.type,
-    index: item.index,
-    robotComment: item.robotComment,
-    state: item.state,
-    writeCode: item.writeCode,
-    limit: item.limit
-  }]));
-  robotCommentComparison = buildRobotCommentComparison(robotComments).map((item) => ({
-    ...item,
-    selected: item.different && !importedKeys.has(assignmentKey(item.type, item.index)) && Boolean(item.selected)
-  }));
-  renderRobotCommentComparison();
-  setRobotOnlineActionState(compareRobotCommentsBtn, robotOnlineStatus !== "online");
-  robotCommentsStatus.textContent = `Imported ${selected.length} robot comment${selected.length === 1 ? "" : "s"} into Robo Programmer.${workbookChanged ? ` Updated ${assignmentTemplateFileName}.` : " Data Assignments already matched the imported text."} Synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`;
 }
 
 function robotExportProgramName(file) {
@@ -4232,8 +4156,11 @@ function setRobotOnlineUi(status, message = "") {
   };
   goOnlineLabel.textContent = labels[status] || "Go Online";
   goOnlineBtn.title = message || (robotOnlineAddress ? `Robot: ${robotOnlineAddress}` : "Connect to a robot");
+  robotPositionWorkspaceTab.hidden = status !== "online";
   updateLoadLsFromRobotButton();
-  if (status !== "online" && activeWorkspaceView === "robot-position") resetRobotPositionDisplay();
+  if (status !== "online" && activeWorkspaceView === "robot-position") {
+    setWorkspaceView("editor");
+  }
   renderRobotOnlineAddressSelect();
 }
 
@@ -4622,7 +4549,7 @@ async function exportSelectedPrograms() {
       allowOverwrite: true,
       files: selected.map((item) => ({
         name: item.remoteName,
-        content: ensureLsEndTrailingBlankLine(item.file.content),
+        content: item.file.content,
         allowOverwrite: true
       }))
     });
@@ -4964,16 +4891,16 @@ function robotExtAxisPairs(extAxes = []) {
 function resetRobotPositionDisplay() {
   stopRobotPositionLive();
   robotPositionRequestActive = false;
-  robotPositionStatus.textContent = liveRobotOfflineMessage;
+  robotPositionStatus.textContent = "Go Online to load live robot data.";
   robotPositionSummary.textContent = "";
   robotPositionJoints.classList.add("muted-position");
   robotPositionUserFrame.classList.add("muted-position");
   robotPositionWorld.classList.add("muted-position");
-  robotPositionJoints.textContent = liveRobotOfflineMessage;
-  robotPositionUserFrame.textContent = liveRobotOfflineMessage;
-  robotPositionWorld.textContent = liveRobotOfflineMessage;
+  robotPositionJoints.textContent = "No joint data yet.";
+  robotPositionUserFrame.textContent = "No user-frame data yet.";
+  robotPositionWorld.textContent = "No world data yet.";
   liveRobotAlarms.classList.add("muted-position");
-  liveRobotAlarms.textContent = liveRobotOfflineMessage;
+  liveRobotAlarms.textContent = "Go Online to load alarms.";
   resetRobotPositionRegisters();
   resetRobotNumericRegisters();
   resetRobotFlags();
@@ -5114,14 +5041,14 @@ function robotProgramHistoryTime(value) {
 
 function resetRobotProgramMonitor() {
   robotProgramMonitorRequestActive = false;
-  robotProgramMonitorStatus.textContent = liveRobotOfflineMessage;
+  robotProgramMonitorStatus.textContent = "Open this tab while online to monitor program execution.";
   robotProgramMonitorHero.classList.add("muted-position");
-  robotProgramMonitorHero.textContent = liveRobotOfflineMessage;
+  robotProgramMonitorHero.textContent = "Waiting for live program data.";
   robotProgramTaskCount.textContent = "0 tasks";
   robotProgramTaskList.classList.add("muted-position");
-  robotProgramTaskList.textContent = liveRobotOfflineMessage;
+  robotProgramTaskList.textContent = "No task data yet.";
   robotProgramSource.classList.add("muted-position");
-  robotProgramSource.textContent = liveRobotOfflineMessage;
+  robotProgramSource.textContent = "Source context appears when a TP task is available.";
 }
 
 function renderRobotProgramMonitor(snapshot = {}) {
@@ -5265,14 +5192,14 @@ function resetRobotNumericRegisters() {
   robotNumericRegistersAddress = "";
   robotNumericRegistersLoading = false;
   robotNumericRegistersUpdatedAt = "";
-  robotNumericTableWrap.innerHTML = `<div class="assignment-empty">${liveRobotOfflineMessage}</div>`;
+  robotNumericTableWrap.innerHTML = "";
 }
 
 function resetRobotFlags() {
   robotFlags = [];
   robotFlagsAddress = "";
   robotFlagsLoading = false;
-  robotFlagTableWrap.innerHTML = `<div class="assignment-empty">${liveRobotOfflineMessage}</div>`;
+  robotFlagTableWrap.innerHTML = "";
 }
 
 function renderRobotNumericRegisters() {
@@ -5782,8 +5709,8 @@ function resetRobotPositionRegisters() {
   robotPrSearch.value = "";
   robotPrList.innerHTML = "";
   robotPrDetails.classList.add("muted-position");
-  robotPrDetails.textContent = liveRobotOfflineMessage;
-  robotPrStatus.textContent = liveRobotOfflineMessage;
+  robotPrDetails.textContent = "Go Online to load Position Registers.";
+  robotPrStatus.textContent = "Go Online to load Position Registers.";
 }
 
 async function readRobotPositionRegisters({ force = false } = {}) {
@@ -7217,7 +7144,7 @@ async function exportCurrentFile() {
     return;
   }
 
-  const exportContent = ensureLsEndTrailingBlankLine(mergeDisplayedContent(file.content, editor.value));
+  const exportContent = mergeDisplayedContent(file.content, editor.value);
   const suggestedName = file.name || "program.LS";
 
   if (window.showSaveFilePicker) {
@@ -9306,7 +9233,7 @@ robotCommentDifferenceFilter.addEventListener("change", () => {
 
 selectVisibleRobotCommentsBtn.addEventListener("click", () => {
   robotCommentVisibleComparison().forEach(({ item }) => {
-    if (item.different) item.selected = true;
+    if (robotCommentIsPushable(item)) item.selected = true;
   });
   renderRobotCommentComparison();
 });
@@ -9327,7 +9254,6 @@ compareRobotCommentsBtn.addEventListener("click", () => {
     robotCommentsStatus.textContent = `Unable to compare robot comments: ${error.message}`;
     setRobotOnlineActionState(compareRobotCommentsBtn, robotOnlineStatus !== "online");
     setRobotOnlineActionState(pushRobotCommentsBtn, true);
-    setRobotOnlineActionState(importRobotCommentsBtn, true);
   });
 });
 
@@ -9339,19 +9265,6 @@ pushRobotCommentsBtn.addEventListener("click", () => {
   }
   pushSelectedRobotComments().catch((error) => {
     robotCommentsStatus.textContent = `Unable to push robot comments: ${error.message}`;
-    setRobotOnlineActionState(compareRobotCommentsBtn, robotOnlineStatus !== "online");
-    renderRobotCommentComparison();
-  });
-});
-
-importRobotCommentsBtn.addEventListener("click", () => {
-  if (robotOnlineStatus !== "online") {
-    robotCommentsStatus.textContent = robotOfflineActionTitle;
-    enforceRobotOnlineActionState();
-    return;
-  }
-  importSelectedRobotComments().catch((error) => {
-    robotCommentsStatus.textContent = `Unable to import robot comments: ${error.message}`;
     setRobotOnlineActionState(compareRobotCommentsBtn, robotOnlineStatus !== "online");
     renderRobotCommentComparison();
   });
@@ -10246,7 +10159,6 @@ function showInitialStartScreen() {
   resetRobotCommentTypeFilter();
   robotCommentsStatus.textContent = "Go Online before comparing robot comments.";
   setRobotOnlineActionState(pushRobotCommentsBtn, true);
-  setRobotOnlineActionState(importRobotCommentsBtn, true);
   robotAddressInput.value = "";
   robotExportAddressInput.value = "";
   robotBackupAddressInput.value = "";
