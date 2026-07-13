@@ -470,6 +470,7 @@ let robotCommentDifferenceFilterValue = "all";
 let robotExportPrograms = [];
 let robotExportRemoteFiles = [];
 let robotExportConnected = false;
+let robotExportCanExport = false;
 let robotBackupInventory = [];
 let robotBackupConnected = false;
 let robotBackupActive = false;
@@ -610,7 +611,7 @@ const assignmentSheetNames = [
 
 const robotCommentCategories = [
   { readCode: 28, types: [{ type: "R", writeCode: 1, limit: 16 }] },
-  { readCode: 80, range: "&sStartIdx=1&sEndIdx=1000", types: [{ type: "PR", writeCode: 3, limit: 16 }] },
+  { readCode: 80, types: [{ type: "PR", writeCode: 3, limit: 16 }] },
   { readCode: 30, types: [{ type: "SR", writeCode: 14, limit: 16 }] },
   { readCode: 32, types: [{ type: "RI", writeCode: 6, limit: 24 }, { type: "RO", writeCode: 7, limit: 24 }] },
   { readCode: 33, types: [{ type: "DI", writeCode: 8, limit: 24 }, { type: "DO", writeCode: 9, limit: 24 }] },
@@ -2140,6 +2141,7 @@ function closeProject() {
   assignmentWorkbookData = null;
   robotCommentComparison = [];
   robotExportConnected = false;
+  robotExportCanExport = false;
   robotExportPrograms = [];
   robotExportRemoteFiles = [];
   robotExportAutoCheckedAddress = "";
@@ -3338,6 +3340,8 @@ function setWorkspaceView(view) {
     renderRobotExportPrograms();
   } else if (activeWorkspaceView === "robot-position" && robotOnlineStatus !== "online") {
     resetRobotPositionDisplay();
+  } else if (activeWorkspaceView === "robot-position") {
+    refreshVisibleLiveRobotPanel({ force: true }).catch(() => {});
   }
 }
 function updateProjectActionVisibility() {
@@ -4294,6 +4298,7 @@ function goOffline() {
   robotOnlineChecking = false;
   robotExportAutoCheckedAddress = "";
   robotExportConnected = false;
+  robotExportCanExport = false;
   robotExportRemoteFiles = [];
   robotBackupConnected = false;
   robotBackupInventory = [];
@@ -4328,23 +4333,17 @@ async function checkRobotOnline({ manual = false } = {}) {
   }
   try {
     const robotOrigin = await rememberRobotOnlineAddress(address);
-    const liveState = await callRobotExportApi("/robot-live/state", { robotAddress: robotOrigin }, { signal: robotOnlineAbortController.signal });
-    renderLiveRobotState(liveState);
-    robotPositionStatus.textContent = `Live Robot data refreshed from ${robotOnlineAddress}.`;
+    const overviewVisible = activeWorkspaceView === "robot-position" && activeLiveRobotTool === "overview";
+    if (overviewVisible) {
+      await readRobotLiveOverview({ robotOrigin, signal: robotOnlineAbortController.signal });
+    } else {
+      await callRobotExportApi("/robot-online/ping", { robotAddress: robotOrigin }, { signal: robotOnlineAbortController.signal });
+    }
     setRobotOnlineUi("online", `Online with ${robotOnlineAddress}. Refreshing every ${robotOnlinePollMs / 1000} seconds.`);
     startRobotOnlineMonitor();
-    try {
-      await readRobotProgramMonitor();
-    } catch {
-    }
-    if (activeLiveRobotTool === "numeric-registers") {
+    if (activeWorkspaceView === "robot-position" && (!overviewVisible || activeLiveRobotTool !== "overview")) {
       try {
-        await readRobotRegistersAndFlags({ force: true });
-      } catch {
-      }
-    } else {
-      try {
-        await readRobotPositionRegisters();
+        await refreshVisibleLiveRobotPanel({ force: true });
       } catch {
       }
     }
@@ -4381,6 +4380,7 @@ async function runRobotExportAutoCheck({ force = false } = {}) {
     await checkRobotExportConnection({ automatic: true });
   } catch (error) {
     robotExportConnected = false;
+    robotExportCanExport = false;
     robotExportRemoteFiles = [];
     renderRobotExportRequirements({
       ftpInterface: { available: false, message: error.message },
@@ -4392,14 +4392,14 @@ async function runRobotExportAutoCheck({ force = false } = {}) {
 }
 
 function updateRobotExportButtons() {
-  const selectable = robotExportPrograms.filter((item) => item.valid);
+  const selectable = robotExportPrograms.filter(robotExportItemActionable);
   const selected = selectable.filter((item) => item.selected);
-  const exportableSelected = selected.filter((item) => item.canExport);
+  const exportableSelected = robotExportCanExport ? selected.filter((item) => item.canExport) : [];
   const importableSelected = selected.filter((item) => item.canImport);
   const robotOnline = robotOnlineStatus === "online";
   setRobotOnlineActionState(selectAllRobotExportBtn, !robotOnline || !robotExportConnected || selectable.length === 0);
   setRobotOnlineActionState(clearRobotExportBtn, !robotOnline || selected.length === 0);
-  setRobotOnlineActionState(exportSelectedProgramsBtn, !robotOnline || robotLsLoadActive || !robotExportConnected || exportableSelected.length === 0);
+  setRobotOnlineActionState(exportSelectedProgramsBtn, !robotOnline || robotLsLoadActive || !robotExportCanExport || exportableSelected.length === 0);
   setRobotOnlineActionState(
     importSelectedProgramsBtn,
     !robotOnline || robotLsLoadActive || !robotExportConnected || importableSelected.length === 0,
@@ -4408,10 +4408,14 @@ function updateRobotExportButtons() {
   robotExportSummary.textContent = `${selected.length} selected of ${selectable.length} available program${selectable.length === 1 ? "" : "s"} (${exportableSelected.length} exportable, ${importableSelected.length} importable).`;
 }
 
+function robotExportItemActionable(item) {
+  return Boolean(item?.valid) && (Boolean(item.canImport) || (robotExportCanExport && Boolean(item.canExport)));
+}
+
 function renderRobotExportRequirements(requirements = null) {
   const items = [
     ["FTP Interface (R796)", requirements?.ftpInterface],
-    ["ASCII Program Loader (J716)", requirements?.asciiProgramLoader]
+    ["ASCII Program Loader (J716) - Export only", requirements?.asciiProgramLoader]
   ];
   robotExportRequirementsStatus.innerHTML = items.map(([label, requirement]) => {
     const status = requirement?.available === true
@@ -4446,9 +4450,30 @@ function setLiveRobotTool(tool) {
   robotLiveProgramPanel.hidden = !programActive;
   robotLiveNumericPanel.hidden = !numericActive;
   robotLivePrPanel.hidden = !prActive;
-  if (programActive && robotOnlineStatus === "online") readRobotProgramMonitor().catch(() => {});
-  if (numericActive) readRobotRegistersAndFlags({ force: true }).catch(() => {});
-  if (prActive) readRobotPositionRegisters().catch(() => {});
+  if (activeWorkspaceView === "robot-position" && robotOnlineStatus === "online") {
+    refreshVisibleLiveRobotPanel({ force: true }).catch(() => {});
+  }
+}
+
+async function readRobotLiveOverview({ robotOrigin = "", signal } = {}) {
+  const origin = robotOrigin || requireOnlineRobot("read Live Robot overview");
+  const liveState = await callRobotExportApi("/robot-live/state", { robotAddress: origin }, { signal });
+  renderLiveRobotState(liveState);
+  robotPositionStatus.textContent = `Live Robot data refreshed from ${robotOnlineAddress}.`;
+  return liveState;
+}
+
+async function refreshVisibleLiveRobotPanel({ force = false } = {}) {
+  if (activeWorkspaceView !== "robot-position" || robotOnlineStatus !== "online") return;
+  if (activeLiveRobotTool === "overview") {
+    await readRobotLiveOverview();
+  } else if (activeLiveRobotTool === "program-monitor") {
+    await readRobotProgramMonitor();
+  } else if (activeLiveRobotTool === "numeric-registers") {
+    await readRobotRegistersAndFlags({ force });
+  } else if (activeLiveRobotTool === "position-registers") {
+    await readRobotPositionRegisters();
+  }
 }
 function setRobotExportInstructionsOpen(open) {
   robotExportInstructionsContent.hidden = !open;
@@ -4538,6 +4563,9 @@ function renderRobotExportPrograms(remoteFiles = null) {
       };
     });
   robotExportPrograms = [...projectRows, ...remoteOnlyRows];
+  robotExportPrograms.forEach((item) => {
+    if (!robotExportItemActionable(item)) item.selected = false;
+  });
 
   robotExportTableWrap.innerHTML = robotExportPrograms.length ? `
     <table class="robot-comments-table">
@@ -4554,7 +4582,7 @@ function renderRobotExportPrograms(remoteFiles = null) {
               : robotExportConnected ? "New program" : "Connection not checked";
           return `
             <tr>
-              <td><input type="checkbox" data-robot-export-index="${index}" ${item.selected ? "checked" : ""} ${!item.valid || !robotExportConnected ? "disabled" : ""} aria-label="Select ${escapeHtml(item.programName || item.file?.name || "program")}"></td>
+              <td><input type="checkbox" data-robot-export-index="${index}" ${item.selected ? "checked" : ""} ${!robotExportConnected || !robotExportItemActionable(item) ? "disabled" : ""} aria-label="Select ${escapeHtml(item.programName || item.file?.name || "program")}"></td>
               <td>${item.file ? `${escapeHtml(item.file.name)}${item.file.dirty ? " *" : ""}` : `<span class="muted-position">Not in project</span>`}</td>
               <td>${escapeHtml(item.programName || "(invalid)")}</td>
               <td class="${item.projectMissing ? "robot-export-success" : item.remoteLs || item.remoteTp ? "robot-export-overwrite" : ""}">${escapeHtml(robotStatus)}</td>
@@ -4577,17 +4605,21 @@ async function checkRobotExportConnection({ automatic = false } = {}) {
   checkRobotExportBtn.disabled = true;
   exportSelectedProgramsBtn.disabled = true;
   importSelectedProgramsBtn.disabled = true;
-  robotExportStatus.textContent = `${automatic ? "Go Online connected. Checking" : "Checking"} FTP and ASCII Program Loader at ${robotOrigin}...`;
+  robotExportStatus.textContent = `${automatic ? "Go Online connected. Checking" : "Checking"} import and export capabilities at ${robotOrigin}...`;
   renderRobotExportRequirements();
   try {
     const result = await callRobotExportApi("/robot-export/preflight", { robotAddress: robotOrigin });
     renderRobotExportRequirements(result.requirements);
-    robotExportConnected = Boolean(result.ready);
+    robotExportConnected = Boolean(result.canImport ?? result.requirements?.ftpInterface?.available);
+    robotExportCanExport = Boolean(result.canExport ?? result.ready);
     renderRobotExportPrograms(result.files || []);
     await persistProjectRobotSettings(robotOnlineAddress);
-    robotExportStatus.textContent = result.ready
-      ? `${automatic ? "Automatic check complete. " : ""}Robot Export is ready at ${result.ftpHost}. Both required options are available and ${result.files.length} robot files were inventoried.`
-      : `${automatic ? "Automatic check complete. " : ""}Robot Export is not ready at ${result.ftpHost}. Review the required-option results above.`;
+    const prefix = automatic ? "Automatic check complete. " : "";
+    robotExportStatus.textContent = robotExportCanExport
+      ? `${prefix}Program import and export are ready at ${result.ftpHost}. ${result.files.length} robot files were inventoried.`
+      : robotExportConnected
+        ? `${prefix}Program import is ready at ${result.ftpHost}; export is unavailable because the robot does not report ASCII Program Loader (J716). ${result.files.length} robot files were inventoried.`
+        : `${prefix}Program import and export are unavailable at ${result.ftpHost}. Review the FTP result above.`;
   } finally {
     setRobotOnlineActionState(checkRobotExportBtn, robotOnlineStatus !== "online");
   }
@@ -5545,30 +5577,16 @@ async function readRobotFlags({ force = false } = {}) {
   robotFlagsLoading = true;
   try {
     const robotOrigin = requireOnlineRobot("read Flags");
-    const flagCategory = robotCommentCategories.find((category) => category.types.some((item) => item.type === "F"));
-    const [comments, stateResult] = await Promise.all([
-      readRobotComments(robotOrigin, flagCategory ? [flagCategory] : []),
-      callRobotExportApi("/robot-flags/read", { robotAddress: robotOrigin })
-    ]);
-    const flagStates = new Map((Array.isArray(stateResult.flags) ? stateResult.flags : [])
-      .map((flag) => [Number(flag.index), flag]));
-    const flagIndexes = new Set([
-      ...[...comments.values()].filter((item) => item.type === "F").map((item) => Number(item.index)),
-      ...flagStates.keys()
-    ]);
-    robotFlags = [...flagIndexes]
-      .filter((index) => Number.isFinite(index) && index > 0)
-      .sort((a, b) => a - b)
-      .map((index) => {
-        const commentItem = comments.get(assignmentKey("F", index));
-        const stateItem = flagStates.get(index);
-        return {
-          index,
-          state: stateItem?.state || commentItem?.state || "",
-          comment: commentItem?.robotComment ?? stateItem?.comment ?? "",
-          limit: commentItem?.limit || 24
-        };
-      });
+    const result = await callRobotExportApi("/robot-flags/read", { robotAddress: robotOrigin });
+    robotFlags = (Array.isArray(result.flags) ? result.flags : [])
+      .map((flag) => ({
+        index: Number(flag.index),
+        state: String(flag.state || "").toUpperCase(),
+        comment: String(flag.comment || ""),
+        limit: 24
+      }))
+      .filter((flag) => Number.isFinite(flag.index) && flag.index > 0)
+      .sort((a, b) => a.index - b.index);
     robotFlagsAddress = robotOnlineAddress;
     renderRobotFlags();
   } catch (error) {
@@ -9215,6 +9233,7 @@ checkRobotExportBtn.addEventListener("click", () => {
   }
   checkRobotExportConnection().catch((error) => {
     robotExportConnected = false;
+    robotExportCanExport = false;
     robotExportRemoteFiles = [];
     renderRobotExportRequirements({
       ftpInterface: { available: false, message: error.message },
@@ -9252,7 +9271,7 @@ importSelectedProgramsBtn.addEventListener("click", () => {
 
 selectAllRobotExportBtn.addEventListener("click", () => {
   robotExportPrograms.forEach((item) => {
-    if (item.valid) item.selected = true;
+    if (robotExportItemActionable(item)) item.selected = true;
   });
   renderRobotExportPrograms();
 });
@@ -10252,6 +10271,7 @@ function showInitialStartScreen() {
   robotBackupAddressInput.value = "";
   robotPositionAddressInput.value = "";
   robotExportConnected = false;
+  robotExportCanExport = false;
   robotExportPrograms = [];
   robotExportRemoteFiles = [];
   robotExportAutoCheckedAddress = "";

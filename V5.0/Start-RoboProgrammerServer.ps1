@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 28
+$serverApiVersion = 31
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -1006,15 +1006,57 @@ function Handle-RobotCommentRequest {
 
     if ($Target -eq "/robot-comments/read") {
       $pages = @()
+      $ioComments = $null
       foreach ($category in @($payload.categories)) {
         $readCode = [string]$category.readCode
         if ($readCode -notmatch "^\d+$") { throw "Invalid robot comment read code." }
         $range = [string]$category.range
         if ($range -and $range -notmatch "^&[A-Za-z0-9_=&%-]*$") { throw "Invalid robot comment range." }
+        $directItems = $null
+        $limit = 24
+        $source = "COMGET"
+        if ($readCode -eq "28") {
+          $directItems = @(ConvertFrom-RobotNumericRegisterText (Get-RobotNumericRegisterText $connection.FtpHost $connection.HttpOrigin) | ForEach-Object {
+            [pscustomobject]@{ type = "R"; index = $_.index; comment = $_.comment; state = "" }
+          })
+          $limit = 16
+          $source = "NUMREG.VA"
+        } elseif ($readCode -eq "80") {
+          $directItems = @(ConvertFrom-RobotPositionRegisterText (Get-RobotPositionRegisterText $connection.FtpHost $connection.HttpOrigin) | ForEach-Object {
+            [pscustomobject]@{ type = "PR"; index = $_.index; comment = $_.comment; state = "" }
+          })
+          $limit = 16
+          $source = "POSREG.VA"
+        } elseif ($readCode -in @("32", "33", "34", "35", "76")) {
+          if ($null -eq $ioComments) {
+            $ioComments = @(ConvertFrom-RobotIoCommentText (Get-RobotIoStateText $connection.FtpHost $connection.HttpOrigin))
+          }
+          $types = switch ($readCode) {
+            "32" { @("RI", "RO") }
+            "33" { @("DI", "DO") }
+            "34" { @("GI", "GO") }
+            "35" { @("AI", "AO") }
+            "76" { @("F") }
+          }
+          $directItems = @($ioComments | Where-Object { $_.type -in $types })
+          $source = "IOSTATE.DG"
+        }
+
+        if ($null -ne $directItems) {
+          $pages += @{
+            readCode = $readCode
+            range = $range
+            source = $source
+            html = ConvertTo-RobotCommentHtml $directItems $limit
+          }
+          continue
+        }
+
         $pagePath = "/karel/ComGet?sFc=$readCode$range"
         $pages += @{
           readCode = $readCode
           range = $range
+          source = $source
           html = Get-RobotRawTextPage $connection.HttpOrigin $pagePath 20000
         }
       }
@@ -1197,6 +1239,63 @@ function ConvertFrom-RobotFlagStateText {
     }
   }
   return @($flags | Sort-Object index)
+}
+
+function ConvertFrom-RobotIoCommentText {
+  param([string]$Text)
+
+  $typeMap = @{
+    DIN = "DI"
+    DOUT = "DO"
+    GIN = "GI"
+    GOUT = "GO"
+    AIN = "AI"
+    AOUT = "AO"
+    RI = "RI"
+    RO = "RO"
+    FLG = "F"
+  }
+  $items = @()
+  $withoutTags = [regex]::Replace([string]$Text, "<[^>]+>", " ")
+  $normalized = [System.Net.WebUtility]::HtmlDecode($withoutTags) -replace "`r?`n", "`n"
+  foreach ($rawLine in @($normalized -split "`n")) {
+    $matches = @([regex]::Matches(
+      $rawLine,
+      "\b(DIN|DOUT|GIN|GOUT|AIN|AOUT|RI|RO|FLG)\[\s*(\d+)\]\s+(ON|OFF|[-+]?(?:\d+(?:\.\d*)?|\.\d+))\b",
+      [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    ))
+    for ($matchIndex = 0; $matchIndex -lt $matches.Count; $matchIndex++) {
+      $match = $matches[$matchIndex]
+      $commentStart = $match.Index + $match.Length
+      $commentEnd = if ($matchIndex + 1 -lt $matches.Count) { $matches[$matchIndex + 1].Index } else { $rawLine.Length }
+      $comment = if ($commentEnd -gt $commentStart) { $rawLine.Substring($commentStart, $commentEnd - $commentStart).Trim() } else { "" }
+      $robotType = $match.Groups[1].Value.ToUpperInvariant()
+      $items += [pscustomobject]@{
+        type = $typeMap[$robotType]
+        index = [int]$match.Groups[2].Value
+        state = $match.Groups[3].Value.ToUpperInvariant()
+        comment = $comment
+      }
+    }
+  }
+  return @($items | Sort-Object type, index)
+}
+
+function ConvertTo-RobotCommentHtml {
+  param(
+    [object[]]$Items,
+    [int]$Limit
+  )
+
+  $rows = @($Items | ForEach-Object {
+    $type = [System.Net.WebUtility]::HtmlEncode([string]$_.type)
+    $index = [int]$_.index
+    $state = [System.Net.WebUtility]::HtmlEncode([string]$_.state)
+    $comment = [System.Net.WebUtility]::HtmlEncode([string]$_.comment)
+    $reference = "${type}[$index]"
+    "<tr><td>$reference $state</td><td><input name=`"strComment$index`" maxlength=`"$Limit`" value=`"$comment`"></td></tr>"
+  })
+  return "<table><tbody>$($rows -join '')</tbody></table>"
 }
 
 function Find-RobotNumericRegister {
@@ -1599,6 +1698,25 @@ function Handle-RobotLiveStateRequest {
     Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
   }
 }
+function Handle-RobotHeartbeatRequest {
+  param(
+    [System.Net.Sockets.NetworkStream]$Stream,
+    [string]$RequestBody
+  )
+
+  try {
+    $payload = $RequestBody | ConvertFrom-Json
+    $connection = Get-RobotConnectionInfo ([string]$payload.robotAddress)
+    [void](Get-RobotRawTextPage $connection.HttpOrigin "/MD/CURPOS.DG" 10000)
+    Send-JsonResponse $Stream 200 "OK" @{
+      ok = $true
+      capturedAt = [DateTime]::UtcNow.ToString("o")
+      robotAddress = $connection.HttpOrigin
+    }
+  } catch {
+    Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
+  }
+}
 function Handle-RobotProgramMonitorRequest {
   param(
     [System.Net.Sockets.NetworkStream]$Stream,
@@ -1710,6 +1828,8 @@ function Handle-RobotExportRequest {
       Send-JsonResponse $Stream 200 "OK" @{
         ok = $true
         ready = ($ftpAvailable -and $asciiProgramLoader)
+        canImport = $ftpAvailable
+        canExport = ($ftpAvailable -and $asciiProgramLoader)
         ftpHost = $connection.FtpHost
         requirements = @{
           ftpInterface = @{
@@ -1939,6 +2059,10 @@ try {
       }
       if ($method -eq "POST" -and $pathOnly -eq "/robot-live/state") {
         Handle-RobotLiveStateRequest $stream $requestBody
+        continue
+      }
+      if ($method -eq "POST" -and $pathOnly -eq "/robot-online/ping") {
+        Handle-RobotHeartbeatRequest $stream $requestBody
         continue
       }
       if ($method -eq "POST" -and $pathOnly -eq "/robot-program-monitor/state") {

@@ -446,17 +446,17 @@
                 <span aria-hidden="true">-</span>
               </button>
               <div id="robotExportInstructionsContent">
-                <p>Robot Export sends selected LS files from the open project to the robot selected in the top Online control. A robot with the FANUC ASCII Program Loader option will compile each uploaded LS file into a TP program.</p>
+                <p>Program Import downloads robot programs into the open project. Program Export sends selected project LS files to the robot, where ASCII Program Loader compiles them into TP programs.</p>
                 <div class="robot-export-requirements">
-                  <h4>Required Robot Options</h4>
+                  <h4>Robot Transfer Capabilities</h4>
                   <ul>
-                    <li><strong>FTP Interface (R796)</strong> - transfers LS files and verifies robot files.</li>
-                    <li><strong>ASCII Program Loader (J716)</strong> - compiles uploaded LS files into TP programs.</li>
+                    <li><strong>FTP Interface (R796)</strong> - inventories and imports robot programs, and transfers LS files for export.</li>
+                    <li><strong>ASCII Program Loader (J716)</strong> - required only for export, where uploaded LS files are compiled into TP programs.</li>
                   </ul>
-                  <p><strong>ASCII Upload is not required.</strong></p>
+                  <p><strong>Import remains available when J716 is not installed.</strong></p>
                   <div id="robotExportRequirementsStatus" class="robot-export-requirements-status">
                     <div><span>FTP Interface (R796)</span><strong class="requirement-unknown">Not checked</strong></div>
-                    <div><span>ASCII Program Loader (J716)</span><strong class="requirement-unknown">Not checked</strong></div>
+                    <div><span>ASCII Program Loader (J716) - Export only</span><strong class="requirement-unknown">Not checked</strong></div>
                   </div>
                 </div>
                 <p class="beta-notice"><strong>Important:</strong> Exporting can replace programs already stored on the robot. Programs with unsaved Robo Programmer edits are exported using the current editor contents. Never export while the target program is running or selected for execution.</p>
@@ -473,7 +473,7 @@
                 <button id="exportSelectedProgramsBtn" type="button" disabled title="Go Online with Robot to Use" data-enabled-title="Send the selected project LS programs to the robot for compilation and verification.">Export Selected Programs</button>
                 <button id="importSelectedProgramsBtn" type="button" disabled title="Go Online with Robot to Use" data-enabled-title="Download the selected LS programs from the online robot, archive each current project copy in Trash, and replace it with the robot version.">Import Selected Programs</button>
               </div>
-              <div id="robotExportStatus" class="assignment-status">Go Online, then check the online robot before selecting programs to export.</div>
+              <div id="robotExportStatus" class="assignment-status">Go Online, then check the online robot before selecting programs to import or export.</div>
               <div class="robot-export-list-actions">
                 <button id="selectAllRobotExportBtn" type="button" disabled title="Go Online with Robot to Use" data-enabled-title="Select every available project LS program in this list.">Select All</button>
                 <button id="clearRobotExportBtn" type="button" disabled title="Go Online with Robot to Use" data-enabled-title="Clear all selected programs in this list.">Clear Selection</button>
