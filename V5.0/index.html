@@ -111,6 +111,22 @@
           <div id="projectResizeHandle" class="resize-handle" role="separator" aria-label="Resize project files panel" aria-orientation="vertical" tabindex="0"></div>
 
           <section class="editor-pane" aria-label="Fanuc LS editor">
+            <div id="editorFindBar" class="editor-find-bar" role="search" aria-label="Find in active LS editor" hidden>
+              <div class="editor-find-row">
+                <input id="editorFindInput" type="search" placeholder="Find" aria-label="Find text" autocomplete="off" spellcheck="false">
+                <button id="editorFindCaseBtn" class="editor-find-option" type="button" aria-pressed="false" title="Match case">Aa</button>
+                <span id="editorFindResult" class="editor-find-result" aria-live="polite">0 of 0</span>
+                <button id="editorFindPreviousBtn" class="editor-find-icon" type="button" title="Previous match" aria-label="Previous match">^</button>
+                <button id="editorFindNextBtn" class="editor-find-icon" type="button" title="Next match" aria-label="Next match">v</button>
+                <button id="editorReplaceToggleBtn" class="editor-find-command" type="button" aria-expanded="false" aria-controls="editorReplaceRow">Replace</button>
+                <button id="editorFindCloseBtn" class="editor-find-icon" type="button" title="Close find" aria-label="Close find">x</button>
+              </div>
+              <div id="editorReplaceRow" class="editor-find-row editor-replace-row" hidden>
+                <input id="editorReplaceInput" type="text" placeholder="Replace" aria-label="Replace text" autocomplete="off" spellcheck="false">
+                <button id="editorReplaceBtn" class="editor-find-command" type="button">Replace</button>
+                <button id="editorReplaceAllBtn" class="editor-find-command" type="button">Replace All</button>
+              </div>
+            </div>
             <div class="editor-split">
               <div class="editor-column primary-editor-column">
                 <div class="editor-header">
@@ -166,7 +182,7 @@
             </div>
           </section>
 
-          <div id="diagnosticsResizeHandle" class="resize-handle" role="separator" aria-label="Resize diagnostics panel" aria-orientation="vertical" tabindex="0"></div>
+          <div id="diagnosticsResizeHandle" class="resize-handle" role="separator" aria-label="Resize editor tools sidebar" aria-orientation="vertical" tabindex="0"></div>
 
           <div class="right-stack">
             <aside class="teach-side-panel" aria-label="Teach pendant editing tools">

@@ -22,6 +22,19 @@ const robotOnlineAddressMenu = document.querySelector("#robotOnlineAddressMenu")
 const recentProjectsList = document.querySelector("#recentProjectsList");
 const clearRecentProjectsBtn = document.querySelector("#clearRecentProjectsBtn");
 const editorLayout = document.querySelector(".editor-layout");
+const rightStack = document.querySelector(".right-stack");
+const editorFindBar = document.querySelector("#editorFindBar");
+const editorFindInput = document.querySelector("#editorFindInput");
+const editorFindCaseBtn = document.querySelector("#editorFindCaseBtn");
+const editorFindResult = document.querySelector("#editorFindResult");
+const editorFindPreviousBtn = document.querySelector("#editorFindPreviousBtn");
+const editorFindNextBtn = document.querySelector("#editorFindNextBtn");
+const editorReplaceToggleBtn = document.querySelector("#editorReplaceToggleBtn");
+const editorFindCloseBtn = document.querySelector("#editorFindCloseBtn");
+const editorReplaceRow = document.querySelector("#editorReplaceRow");
+const editorReplaceInput = document.querySelector("#editorReplaceInput");
+const editorReplaceBtn = document.querySelector("#editorReplaceBtn");
+const editorReplaceAllBtn = document.querySelector("#editorReplaceAllBtn");
 const workspaceTabs = document.querySelector("#workspaceTabs");
 const editorWorkspaceTab = document.querySelector("#editorWorkspaceTab");
 const assignmentsWorkspaceTab = document.querySelector("#assignmentsWorkspaceTab");
@@ -453,6 +466,9 @@ let footerVisible = false;
 let splitHeaderVisible = false;
 let splitFooterVisible = false;
 let sessionPersistTimer = null;
+let workspaceLayoutPersistTimer = null;
+let workspaceLayoutRestoring = false;
+let editorFindMatchIndex = -1;
 let undoStack = [];
 let redoStack = [];
 let historySuppressed = false;
@@ -553,6 +569,7 @@ const recentProjectsDbName = "robo-programmer-v4";
 const recentProjectsStoreName = "recent-projects";
 const sessionSnapshotsStoreName = "session-snapshots";
 const activeSessionPointerKey = "active-session";
+const projectWorkspaceLayoutPrefix = "robo-programmer-project-workspace:";
 const appRootPath = (() => {
   const params = new URLSearchParams(window.location.search);
   const rootFromUrl = params.get("appRoot");
@@ -2133,6 +2150,9 @@ function closeProject() {
     if (!shouldClose) return;
   }
 
+  persistProjectWorkspaceLayout();
+  closeEditorFind(false);
+  resetRobotLiveEditModes();
   popInAssignments();
 
   project = null;
@@ -2184,6 +2204,9 @@ function closeProject() {
 }
 
 function loadProject(nextProject) {
+  const savedWorkspaceLayout = readProjectWorkspaceLayout(nextProject);
+  workspaceLayoutRestoring = true;
+  closeEditorFind(false);
   project = nextProject;
   project.files.forEach((file) => {
     file.favorite = Boolean(file.favorite);
@@ -2217,9 +2240,17 @@ function loadProject(nextProject) {
   setRobotOnlineActionState(pushRobotCommentsBtn, true);
   setRobotOnlineActionState(importRobotCommentsBtn, true);
   setSplitEditorOpen(false);
+  resetRobotLiveEditModes();
   startScreen.hidden = true;
   activeWorkspaceView = "editor";
   setWorkspaceView("editor");
+  setProjectPanelWidth(savedWorkspaceLayout?.projectWidth ?? Number(localStorage.getItem("robo-programmer-project-width") || 250));
+  setRightPanelWidth(savedWorkspaceLayout?.rightWidth ?? Number(localStorage.getItem("robo-programmer-right-width") || localStorage.getItem("robo-programmer-diagnostics-width") || 340));
+  setTeachPendantOpen(savedWorkspaceLayout?.panels?.teachPendant ?? false);
+  setAdvancedTpOpen(savedWorkspaceLayout?.panels?.advancedTp ?? false);
+  setProjectToolsOpen(savedWorkspaceLayout?.panels?.projectTools ?? false);
+  setDiagnosticsOpen(savedWorkspaceLayout?.panels?.diagnostics ?? true);
+  setLiveRobotTool(savedWorkspaceLayout?.activeLiveRobotTool || "overview");
   updateProjectActionVisibility();
   updateAssignmentPathDisplay();
   projectNameEl.textContent = project.name;
@@ -2229,15 +2260,34 @@ function loadProject(nextProject) {
   renderFileList();
 
   if (project.files.length > 0) {
-    currentFileNameEl.textContent = "No file selected";
-    setMainEditorEmptyState("Select an LS file from the Project list to begin editing.");
-    clearEditorState("Select an LS file from the Project list.");
+    const savedFile = findProjectFileByName(savedWorkspaceLayout?.currentFileName);
+    if (savedFile) {
+      switchFile(savedFile.id);
+    } else {
+      currentFileNameEl.textContent = "No file selected";
+      setMainEditorEmptyState("Select an LS file from the Project list to begin editing.");
+      clearEditorState("Select an LS file from the Project list.");
+    }
+
+    const savedSplitFile = findProjectFileByName(savedWorkspaceLayout?.splitFileName);
+    if (savedWorkspaceLayout?.splitOpen && savedSplitFile && savedSplitFile.id !== currentFileId) {
+      setSplitEditorOpen(true);
+      splitFileId = savedSplitFile.id;
+      loadSplitFileIntoEditor();
+    }
   } else {
     currentFileNameEl.textContent = "No LS files found";
     setMainEditorEmptyState("No LS files were found in this project.");
     clearEditorState("No LS files found.");
     showProjectMessage("No .LS files were found in this project folder.");
   }
+  setWorkspaceView(savedWorkspaceLayout?.activeWorkspaceView || "editor");
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (project !== nextProject) return;
+    restoreProjectWorkspaceScroll(savedWorkspaceLayout);
+    workspaceLayoutRestoring = false;
+    persistProjectWorkspaceLayout();
+  }));
   persistSession();
   primeAssignmentWorkbookData(nextProject).catch(() => {});
   if (robotOnlineStatus === "online") {
@@ -3343,6 +3393,7 @@ function setWorkspaceView(view) {
   } else if (activeWorkspaceView === "robot-position") {
     refreshVisibleLiveRobotPanel({ force: true }).catch(() => {});
   }
+  persistProjectWorkspaceLayout();
 }
 function updateProjectActionVisibility() {
   const projectOpen = Boolean(project);
@@ -4453,6 +4504,7 @@ function setLiveRobotTool(tool) {
   if (activeWorkspaceView === "robot-position" && robotOnlineStatus === "online") {
     refreshVisibleLiveRobotPanel({ force: true }).catch(() => {});
   }
+  persistProjectWorkspaceLayout();
 }
 
 async function readRobotLiveOverview({ robotOrigin = "", signal } = {}) {
@@ -5431,10 +5483,15 @@ function renderRobotFlags() {
 
 function applyRobotRegisterEditState() {
   const disabled = !robotRegisterEditsEnabled();
+  robotLiveNumericPanel.classList.toggle("live-editing-enabled", !disabled);
+  robotLiveNumericTab.classList.toggle("live-editing-armed", !disabled);
+  const label = robotRegistersEditToggle.closest("label")?.querySelector("span");
+  if (label) label.textContent = disabled ? "Enable Edits" : "Edits Enabled";
   robotNumericTableWrap.querySelectorAll(".robot-numeric-value-input, .robot-numeric-comment-input")
     .forEach((input) => { input.disabled = disabled; });
   robotFlagTableWrap.querySelectorAll(".robot-flag-state-select, .robot-flag-comment-input")
     .forEach((input) => { input.disabled = disabled; });
+  updateRobotLiveEditingIndicator();
 }
 
 function parseRobotNumericValue(value) {
@@ -5649,9 +5706,25 @@ function robotPrEditsEnabled() {
 
 function applyRobotPrEditState() {
   const disabled = !robotPrEditsEnabled();
+  robotLivePrPanel.classList.toggle("live-editing-enabled", !disabled);
+  robotLivePrTab.classList.toggle("live-editing-armed", !disabled);
+  const label = robotPrEditToggle.closest("label")?.querySelector("span");
+  if (label) label.textContent = disabled ? "Enable Edits" : "Edits Enabled";
   robotPrDetails.querySelectorAll("#robotPrForm input, #robotPrForm select")
     .forEach((field) => { field.disabled = disabled; });
   updateRobotPositionRegisterDirtyState();
+  updateRobotLiveEditingIndicator();
+}
+
+function updateRobotLiveEditingIndicator() {
+  robotPositionWorkspaceTab.classList.toggle("live-editing-armed", robotRegisterEditsEnabled() || robotPrEditsEnabled());
+}
+
+function resetRobotLiveEditModes() {
+  robotRegistersEditToggle.checked = false;
+  robotPrEditToggle.checked = false;
+  applyRobotRegisterEditState();
+  applyRobotPrEditState();
 }
 
 function renderRobotPositionRegisterList() {
@@ -6023,6 +6096,7 @@ function setSplitEditorOpen(open) {
     editorLayout.classList.add("split-active");
     splitEditorBtn.setAttribute("aria-pressed", "true");
     loadSplitFileIntoEditor();
+    persistProjectWorkspaceLayout();
     return;
   }
 
@@ -6032,6 +6106,7 @@ function setSplitEditorOpen(open) {
   splitEditorBtn.setAttribute("aria-pressed", "false");
   splitFileId = null;
   setActiveEditor("main");
+  persistProjectWorkspaceLayout();
   persistSession();
 }
 
@@ -6073,6 +6148,7 @@ function saveCurrentBuffer() {
 function switchFile(fileId) {
   saveCurrentBuffer();
   saveSplitBuffer();
+  persistProjectWorkspaceLayout();
   persistSession();
   currentFileId = fileId;
   const file = getCurrentFile();
@@ -6085,6 +6161,8 @@ function switchFile(fileId) {
   if (splitEditorPane.hidden) renderSplitFileSelect();
   else loadSplitFileIntoEditor();
   loadCurrentFileIntoEditor();
+  refreshEditorFind({ selectClosest: true });
+  scheduleProjectWorkspaceLayoutPersist();
   persistSession();
 }
 
@@ -6111,6 +6189,7 @@ function setActiveEditor(name) {
 
   activeEditorName = name;
   updateSaveCurrentLsButton();
+  if (!editorFindBar.hidden) refreshEditorFind();
 }
 
 function activeEditorState() {
@@ -6695,37 +6774,199 @@ function moveCurrentLine(direction) {
   setEditorLines(lines, nextLine, caret.column, state);
 }
 
-function findTextInEditor() {
-  const text = promptRequired("Find text", "");
-  if (!text) return;
-  const state = activeEditorState();
-  const haystack = state.textarea.value.toUpperCase();
-  const needle = text.toUpperCase();
-  const index = haystack.indexOf(needle, state.textarea.selectionEnd);
-  const wrappedIndex = index >= 0 ? index : haystack.indexOf(needle);
-  if (wrappedIndex < 0) {
-    projectStatus.textContent = `"${text}" was not found.`;
+function editorFindMatches(state = activeEditorState()) {
+  const query = editorFindInput.value;
+  if (!state.file || !query) return [];
+  const matchCase = editorFindCaseBtn.getAttribute("aria-pressed") === "true";
+  const haystack = matchCase ? state.textarea.value : state.textarea.value.toLowerCase();
+  const needle = matchCase ? query : query.toLowerCase();
+  const matches = [];
+  let offset = 0;
+  while (offset <= haystack.length - needle.length) {
+    const index = haystack.indexOf(needle, offset);
+    if (index < 0) break;
+    matches.push(index);
+    offset = index + Math.max(1, needle.length);
+  }
+  return matches;
+}
+
+function selectedEditorFindMatchIndex(matches, state = activeEditorState()) {
+  const queryLength = editorFindInput.value.length;
+  return matches.findIndex((index) => (
+    index === state.textarea.selectionStart
+    && state.textarea.selectionEnd === index + queryLength
+  ));
+}
+
+function activeEditorCanReplace(state = activeEditorState()) {
+  return Boolean(state.file) && !(state.name === "split" && state.textarea.readOnly);
+}
+
+function updateEditorFindControls(matches = editorFindMatches(), state = activeEditorState()) {
+  const selectedIndex = selectedEditorFindMatchIndex(matches, state);
+  if (selectedIndex >= 0) editorFindMatchIndex = selectedIndex;
+  if (editorFindMatchIndex >= matches.length) editorFindMatchIndex = matches.length - 1;
+  const hasMatches = matches.length > 0;
+  const displayIndex = hasMatches && editorFindMatchIndex >= 0 ? editorFindMatchIndex + 1 : 0;
+  editorFindResult.textContent = `${displayIndex} of ${matches.length}`;
+  editorFindPreviousBtn.disabled = !hasMatches;
+  editorFindNextBtn.disabled = !hasMatches;
+  const canReplace = hasMatches && activeEditorCanReplace(state);
+  editorReplaceBtn.disabled = !canReplace;
+  editorReplaceAllBtn.disabled = !canReplace;
+}
+
+function scrollToEditorFindMatch(state, start) {
+  const lineIndex = state.textarea.value.slice(0, start).split("\n").length - 1;
+  const lineHeight = Number.parseFloat(getComputedStyle(state.textarea).lineHeight) || 22;
+  state.textarea.scrollTop = Math.max(0, (lineIndex * lineHeight) - (state.textarea.clientHeight / 2));
+  if (state.name === "main") syncHighlightScroll();
+  else {
+    splitHighlightedCode.scrollTop = splitEditor.scrollTop;
+    splitHighlightedCode.scrollLeft = splitEditor.scrollLeft;
+  }
+}
+
+function selectEditorFindMatch(matches, index, state = activeEditorState()) {
+  if (!matches.length || index < 0) {
+    editorFindMatchIndex = -1;
+    updateEditorFindControls(matches, state);
     return;
   }
-  state.textarea.setSelectionRange(wrappedIndex, wrappedIndex + text.length);
+  editorFindMatchIndex = (index + matches.length) % matches.length;
+  const start = matches[editorFindMatchIndex];
+  state.textarea.setSelectionRange(start, start + editorFindInput.value.length);
+  scrollToEditorFindMatch(state, start);
   state.updateCursorStatus();
-  state.textarea.focus();
+  updateEditorFindControls(matches, state);
+}
+
+function refreshEditorFind({ selectClosest = false } = {}) {
+  if (editorFindBar.hidden) return;
+  const state = activeEditorState();
+  const matches = editorFindMatches(state);
+  const selectedIndex = selectedEditorFindMatchIndex(matches, state);
+  if (selectedIndex >= 0) editorFindMatchIndex = selectedIndex;
+  else if (selectClosest && matches.length) {
+    const closest = matches.findIndex((index) => index >= state.textarea.selectionStart);
+    selectEditorFindMatch(matches, closest >= 0 ? closest : 0, state);
+    return;
+  } else if (!matches.length) editorFindMatchIndex = -1;
+  updateEditorFindControls(matches, state);
+}
+
+function moveEditorFind(direction) {
+  const state = activeEditorState();
+  const matches = editorFindMatches(state);
+  if (!matches.length) {
+    updateEditorFindControls(matches, state);
+    return;
+  }
+  const selectedIndex = selectedEditorFindMatchIndex(matches, state);
+  let nextIndex;
+  if (selectedIndex >= 0) {
+    nextIndex = selectedIndex + direction;
+  } else if (direction > 0) {
+    nextIndex = matches.findIndex((index) => index >= state.textarea.selectionEnd);
+    if (nextIndex < 0) nextIndex = 0;
+  } else {
+    nextIndex = -1;
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      if (matches[index] < state.textarea.selectionStart) {
+        nextIndex = index;
+        break;
+      }
+    }
+    if (nextIndex < 0) nextIndex = matches.length - 1;
+  }
+  selectEditorFindMatch(matches, nextIndex, state);
+}
+
+function setEditorReplaceExpanded(expanded) {
+  editorReplaceRow.hidden = !expanded;
+  editorReplaceToggleBtn.setAttribute("aria-expanded", String(expanded));
+}
+
+function openEditorFind(showReplace = false) {
+  const state = activeEditorState();
+  if (!state.file) return;
+  const wasHidden = editorFindBar.hidden;
+  const selectedText = state.textarea.value.slice(state.textarea.selectionStart, state.textarea.selectionEnd);
+  hideSuggestions();
+  editorFindBar.hidden = false;
+  if (showReplace) setEditorReplaceExpanded(true);
+  if ((wasHidden || document.activeElement === state.textarea) && selectedText && !/[\r\n]/.test(selectedText)) {
+    editorFindInput.value = selectedText;
+  }
+  editorFindMatchIndex = -1;
+  refreshEditorFind({ selectClosest: true });
+  editorFindInput.focus();
+  editorFindInput.select();
+}
+
+function closeEditorFind(returnFocus = true) {
+  if (editorFindBar.hidden) return;
+  editorFindBar.hidden = true;
+  setEditorReplaceExpanded(false);
+  editorFindMatchIndex = -1;
+  if (returnFocus && activeEditorState().file) activeEditorState().textarea.focus();
+}
+
+function finalizeEditorFindMutation(state) {
+  renumberTextAreaLines(state.textarea);
+  if (state.name === "main") wrapLongBangCommentLines();
+  else wrapLongBangCommentLinesFor(state.textarea);
+  state.markDirty();
+  state.renderHighlight();
+  state.updateCursorStatus();
+  scheduleDiagnosticsRefresh(0);
+  hideSuggestions();
+  if (state.name === "main") lastEditorValue = state.textarea.value;
+}
+
+function replaceCurrentEditorFindMatch() {
+  const state = activeEditorState();
+  if (!activeEditorCanReplace(state)) return;
+  const matches = editorFindMatches(state);
+  let matchIndex = selectedEditorFindMatchIndex(matches, state);
+  if (matchIndex < 0) matchIndex = Math.max(0, Math.min(editorFindMatchIndex, matches.length - 1));
+  if (!matches.length || matchIndex < 0) return;
+  if (state.name === "main") pushUndoSnapshot();
+  const start = matches[matchIndex];
+  state.textarea.setRangeText(editorReplaceInput.value, start, start + editorFindInput.value.length, "end");
+  finalizeEditorFindMutation(state);
+  editorFindMatchIndex = Math.max(-1, matchIndex - 1);
+  moveEditorFind(1);
+}
+
+function replaceAllEditorFindMatches() {
+  const state = activeEditorState();
+  if (!activeEditorCanReplace(state)) return;
+  const matches = editorFindMatches(state);
+  if (!matches.length) return;
+  if (state.name === "main") pushUndoSnapshot();
+  const source = state.textarea.value;
+  const queryLength = editorFindInput.value.length;
+  let result = "";
+  let offset = 0;
+  matches.forEach((index) => {
+    result += source.slice(offset, index) + editorReplaceInput.value;
+    offset = index + queryLength;
+  });
+  state.textarea.value = result + source.slice(offset);
+  finalizeEditorFindMutation(state);
+  editorFindMatchIndex = -1;
+  refreshEditorFind();
+  projectStatus.textContent = `Replaced ${matches.length} match${matches.length === 1 ? "" : "es"} in ${state.file.name}.`;
+}
+
+function findTextInEditor() {
+  openEditorFind(false);
 }
 
 function replaceTextInEditor() {
-  const state = activeEditorState();
-  if (!activeEditorCanEdit(state)) return;
-  const findText = promptRequired("Find text", "");
-  if (!findText) return;
-  const replaceText = prompt("Replace with", "");
-  if (replaceText === null) return;
-  if (state.name === "main") pushUndoSnapshot();
-  state.textarea.value = state.textarea.value.split(findText).join(replaceText);
-  renumberTextAreaLines(state.textarea);
-  state.markDirty();
-  state.renderHighlight();
-  renderDiagnostics();
-  state.updateCursorStatus();
+  openEditorFind(true);
 }
 
 function insertPromptedNewTpInstruction(command) {
@@ -6979,12 +7220,14 @@ function setAdvancedTpOpen(open) {
   advancedTpContent.hidden = !open;
   advancedTpToggle.setAttribute("aria-expanded", String(open));
   advancedTpToggle.querySelector("span:last-child").textContent = open ? "-" : "+";
+  persistProjectWorkspaceLayout();
 }
 
 function setTeachPendantOpen(open) {
   teachPendantContent.hidden = !open;
   teachPendantToggle.setAttribute("aria-expanded", String(open));
   teachPendantToggle.querySelector("span:last-child").textContent = open ? "-" : "+";
+  persistProjectWorkspaceLayout();
 }
 
 function updateMotionBuilder() {
@@ -8488,24 +8731,128 @@ function setDiagnosticsOpen(open) {
   diagnosticsContent.hidden = !open;
   diagnosticsToggle.setAttribute("aria-expanded", String(open));
   diagnosticsToggle.querySelector("span:last-child").textContent = open ? "-" : "+";
+  persistProjectWorkspaceLayout();
 }
 
 function setProjectToolsOpen(open) {
   projectToolsContent.hidden = !open;
   projectToolsToggle.setAttribute("aria-expanded", String(open));
   projectToolsToggle.querySelector("span:last-child").textContent = open ? "-" : "+";
+  persistProjectWorkspaceLayout();
+}
+
+function projectWorkspaceLayoutKeys(projectValue = project) {
+  if (!projectValue?.name) return [];
+  const nameIdentity = `${projectValue.source || "project"}:${projectValue.name}`.trim().toLowerCase();
+  const rootIdentity = normalizeWindowsPath(projectValue.projectRootPath).toLowerCase();
+  return [...new Set([rootIdentity, nameIdentity].filter(Boolean))]
+    .map((identity) => `${projectWorkspaceLayoutPrefix}${encodeURIComponent(identity)}`);
+}
+
+function readProjectWorkspaceLayout(projectValue) {
+  for (const key of projectWorkspaceLayoutKeys(projectValue)) {
+    try {
+      const layout = JSON.parse(localStorage.getItem(key) || "null");
+      if (layout && typeof layout === "object") return layout;
+    } catch {
+    }
+  }
+  return null;
+}
+
+function currentEditorPanelWidth(propertyName, fallback) {
+  const value = Number.parseFloat(getComputedStyle(editorLayout).getPropertyValue(propertyName));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function findProjectFileByName(fileName) {
+  const normalizedName = String(fileName || "").trim().toLowerCase();
+  return normalizedName
+    ? project?.files.find((file) => file.name.toLowerCase() === normalizedName) || null
+    : null;
+}
+
+function finiteScrollPosition(value) {
+  const position = Number(value);
+  return Number.isFinite(position) && position >= 0 ? position : 0;
+}
+
+function persistProjectWorkspaceLayout() {
+  if (!project || workspaceLayoutRestoring) return;
+  if (workspaceLayoutPersistTimer) {
+    clearTimeout(workspaceLayoutPersistTimer);
+    workspaceLayoutPersistTimer = null;
+  }
+
+  const layout = {
+    version: 1,
+    activeWorkspaceView,
+    activeLiveRobotTool,
+    currentFileName: getCurrentFile()?.name || "",
+    splitOpen: !splitEditorPane.hidden,
+    splitFileName: getSplitFile()?.name || "",
+    projectWidth: currentEditorPanelWidth("--project-width", 250),
+    rightWidth: currentEditorPanelWidth("--right-width", 340),
+    panels: {
+      teachPendant: !teachPendantContent.hidden,
+      advancedTp: !advancedTpContent.hidden,
+      projectTools: !projectToolsContent.hidden,
+      diagnostics: !diagnosticsContent.hidden
+    },
+    scroll: {
+      editorTop: editor.scrollTop,
+      editorLeft: editor.scrollLeft,
+      splitTop: splitEditor.scrollTop,
+      splitLeft: splitEditor.scrollLeft,
+      fileListTop: fileListEl.scrollTop,
+      toolsTop: rightStack.scrollTop
+    }
+  };
+
+  const serialized = JSON.stringify(layout);
+  projectWorkspaceLayoutKeys().forEach((key) => {
+    try {
+      localStorage.setItem(key, serialized);
+    } catch {
+    }
+  });
+}
+
+function scheduleProjectWorkspaceLayoutPersist() {
+  if (!project || workspaceLayoutRestoring) return;
+  if (workspaceLayoutPersistTimer) clearTimeout(workspaceLayoutPersistTimer);
+  workspaceLayoutPersistTimer = setTimeout(persistProjectWorkspaceLayout, 180);
+}
+
+function restoreProjectWorkspaceScroll(layout) {
+  const scroll = layout?.scroll || {};
+  editor.scrollTop = finiteScrollPosition(scroll.editorTop);
+  editor.scrollLeft = finiteScrollPosition(scroll.editorLeft);
+  splitEditor.scrollTop = finiteScrollPosition(scroll.splitTop);
+  splitEditor.scrollLeft = finiteScrollPosition(scroll.splitLeft);
+  fileListEl.scrollTop = finiteScrollPosition(scroll.fileListTop);
+  rightStack.scrollTop = finiteScrollPosition(scroll.toolsTop);
+  syncHighlightScroll();
+  splitHighlightedCode.scrollTop = splitEditor.scrollTop;
+  splitHighlightedCode.scrollLeft = splitEditor.scrollLeft;
 }
 
 function setRightPanelWidth(width) {
   const clampedWidth = Math.max(260, Math.min(760, Math.round(width)));
   editorLayout.style.setProperty("--right-width", `${clampedWidth}px`);
-  localStorage.setItem("robo-programmer-right-width", String(clampedWidth));
+  diagnosticsResizeHandle.setAttribute("aria-valuemin", "260");
+  diagnosticsResizeHandle.setAttribute("aria-valuemax", "760");
+  diagnosticsResizeHandle.setAttribute("aria-valuenow", String(clampedWidth));
+  if (!project) localStorage.setItem("robo-programmer-right-width", String(clampedWidth));
 }
 
 function setProjectPanelWidth(width) {
   const clampedWidth = Math.max(170, Math.min(520, Math.round(width)));
   editorLayout.style.setProperty("--project-width", `${clampedWidth}px`);
-  localStorage.setItem("robo-programmer-project-width", String(clampedWidth));
+  projectResizeHandle.setAttribute("aria-valuemin", "170");
+  projectResizeHandle.setAttribute("aria-valuemax", "520");
+  projectResizeHandle.setAttribute("aria-valuenow", String(clampedWidth));
+  if (!project) localStorage.setItem("robo-programmer-project-width", String(clampedWidth));
 }
 
 function resizeRightPanelFromPointer(clientX) {
@@ -9454,8 +9801,69 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  const modifier = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+  if (modifier && !event.altKey && activeWorkspaceView === "editor" && activeEditorState().file) {
+    if (key === "f") {
+      event.preventDefault();
+      openEditorFind(false);
+      return;
+    }
+    if (key === "h") {
+      event.preventDefault();
+      openEditorFind(true);
+      return;
+    }
+  }
+  if (event.key === "F3" && activeWorkspaceView === "editor" && activeEditorState().file && editorFindInput.value) {
+    event.preventDefault();
+    if (editorFindBar.hidden) editorFindBar.hidden = false;
+    moveEditorFind(event.shiftKey ? -1 : 1);
+    return;
+  }
+  if (event.key === "Escape" && !editorFindBar.hidden) {
+    event.preventDefault();
+    closeEditorFind();
+    return;
+  }
   if (event.key === "Escape") setFileMenuOpen(false);
 });
+
+editorFindInput.addEventListener("input", () => {
+  editorFindMatchIndex = -1;
+  refreshEditorFind({ selectClosest: true });
+});
+
+editorFindInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  moveEditorFind(event.shiftKey ? -1 : 1);
+});
+
+editorReplaceInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  replaceCurrentEditorFindMatch();
+});
+
+editorFindCaseBtn.addEventListener("click", () => {
+  const nextValue = editorFindCaseBtn.getAttribute("aria-pressed") !== "true";
+  editorFindCaseBtn.setAttribute("aria-pressed", String(nextValue));
+  editorFindMatchIndex = -1;
+  refreshEditorFind({ selectClosest: true });
+  editorFindInput.focus();
+});
+
+editorFindPreviousBtn.addEventListener("click", () => moveEditorFind(-1));
+editorFindNextBtn.addEventListener("click", () => moveEditorFind(1));
+editorReplaceToggleBtn.addEventListener("click", () => {
+  const expanded = editorReplaceRow.hidden;
+  setEditorReplaceExpanded(expanded);
+  if (expanded) editorReplaceInput.focus();
+});
+editorFindCloseBtn.addEventListener("click", () => closeEditorFind());
+editorReplaceBtn.addEventListener("click", replaceCurrentEditorFindMatch);
+editorReplaceAllBtn.addEventListener("click", replaceAllEditorFindMatches);
 
 openProjectBtn.addEventListener("click", () => {
   setFileMenuOpen(false);
@@ -9829,7 +10237,9 @@ splitFileSelect.addEventListener("change", () => {
   saveSplitBuffer();
   splitFileId = splitFileSelect.value;
   loadSplitFileIntoEditor();
+  refreshEditorFind({ selectClosest: true });
   renderFileList();
+  persistProjectWorkspaceLayout();
   persistSession();
 });
 
@@ -9842,11 +10252,13 @@ splitEditor.addEventListener("input", () => {
   renderSplitHighlight();
   updateSplitCursorStatus();
   scheduleDiagnosticsRefresh();
+  refreshEditorFind();
 });
 
 splitEditor.addEventListener("scroll", () => {
   splitHighlightedCode.scrollTop = splitEditor.scrollTop;
   splitHighlightedCode.scrollLeft = splitEditor.scrollLeft;
+  scheduleProjectWorkspaceLayoutPersist();
 });
 
 splitEditor.addEventListener("focus", () => {
@@ -9990,6 +10402,7 @@ diagnosticsResizeHandle.addEventListener("pointerup", (event) => {
     diagnosticsResizeHandle.releasePointerCapture(event.pointerId);
   }
   document.body.classList.remove("resizing");
+  persistProjectWorkspaceLayout();
 });
 
 diagnosticsResizeHandle.addEventListener("pointercancel", (event) => {
@@ -9997,10 +10410,11 @@ diagnosticsResizeHandle.addEventListener("pointercancel", (event) => {
     diagnosticsResizeHandle.releasePointerCapture(event.pointerId);
   }
   document.body.classList.remove("resizing");
+  persistProjectWorkspaceLayout();
 });
 
 diagnosticsResizeHandle.addEventListener("keydown", (event) => {
-  const currentWidth = Number(localStorage.getItem("robo-programmer-right-width") || 340);
+  const currentWidth = currentEditorPanelWidth("--right-width", 340);
 
   if (event.key === "ArrowLeft") {
     event.preventDefault();
@@ -10011,6 +10425,7 @@ diagnosticsResizeHandle.addEventListener("keydown", (event) => {
     event.preventDefault();
     setRightPanelWidth(currentWidth - 24);
   }
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") persistProjectWorkspaceLayout();
 });
 
 projectResizeHandle.addEventListener("pointerdown", (event) => {
@@ -10029,6 +10444,7 @@ projectResizeHandle.addEventListener("pointerup", (event) => {
     projectResizeHandle.releasePointerCapture(event.pointerId);
   }
   document.body.classList.remove("resizing");
+  persistProjectWorkspaceLayout();
 });
 
 projectResizeHandle.addEventListener("pointercancel", (event) => {
@@ -10036,10 +10452,11 @@ projectResizeHandle.addEventListener("pointercancel", (event) => {
     projectResizeHandle.releasePointerCapture(event.pointerId);
   }
   document.body.classList.remove("resizing");
+  persistProjectWorkspaceLayout();
 });
 
 projectResizeHandle.addEventListener("keydown", (event) => {
-  const currentWidth = Number(localStorage.getItem("robo-programmer-project-width") || 250);
+  const currentWidth = currentEditorPanelWidth("--project-width", 250);
 
   if (event.key === "ArrowLeft") {
     event.preventDefault();
@@ -10050,6 +10467,7 @@ projectResizeHandle.addEventListener("keydown", (event) => {
     event.preventDefault();
     setProjectPanelWidth(currentWidth + 24);
   }
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") persistProjectWorkspaceLayout();
 });
 
 editor.addEventListener("beforeinput", (event) => {
@@ -10079,13 +10497,18 @@ editor.addEventListener("input", () => {
   updateCursorStatus();
   showSuggestions();
   scheduleDiagnosticsRefresh();
+  refreshEditorFind();
   lastEditorValue = editor.value;
 });
 
 editor.addEventListener("scroll", () => {
   syncHighlightScroll();
   positionSuggestions();
+  scheduleProjectWorkspaceLayoutPersist();
 });
+
+fileListEl.addEventListener("scroll", scheduleProjectWorkspaceLayoutPersist);
+rightStack.addEventListener("scroll", scheduleProjectWorkspaceLayoutPersist);
 
 editor.addEventListener("click", () => {
   setActiveEditor("main");
@@ -10218,6 +10641,7 @@ suggestionsEl.addEventListener("mousedown", (event) => {
 
 window.addEventListener("resize", positionSuggestions);
 window.addEventListener("beforeunload", (event) => {
+  persistProjectWorkspaceLayout();
   persistSession();
   if (assignmentsPopoutIsOpen()) assignmentsPopoutWindow.close();
   if (!robotBackupActive) return;
@@ -10225,11 +10649,15 @@ window.addEventListener("beforeunload", (event) => {
   event.returnValue = "";
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") persistSession();
+  if (document.visibilityState === "hidden") {
+    persistProjectWorkspaceLayout();
+    persistSession();
+  }
 });
 
 function showInitialStartScreen() {
   stopRobotPositionLive();
+  closeEditorFind(false);
   popInAssignments();
   project = null;
   currentFileId = null;
@@ -10279,6 +10707,7 @@ function showInitialStartScreen() {
   robotBackupInventory = [];
   robotBackupTableWrap.innerHTML = "";
   robotBackupStatus.textContent = "Go Online, then inventory the robot before selecting files to back up.";
+  resetRobotLiveEditModes();
   resetRobotPositionDisplay();
   renderRobotExportRequirements();
   updateAssignmentPathDisplay();
