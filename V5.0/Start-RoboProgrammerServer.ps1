@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 31
+$serverApiVersion = 32
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -1609,8 +1609,7 @@ function Handle-RobotPositionRegisterRequest {
       $mode = ([string]$payload.register.mode).ToLowerInvariant()
       $comment = [string]$payload.register.comment
       $config = [string]$payload.register.config
-      $formattedBlock = Format-RobotPositionRegisterBlock $group $index $comment $mode $payload.register.values $config
-      $cometValue = ConvertTo-RobotPositionRegisterCometValue $formattedBlock
+      $writeXml = Format-RobotPositionRegisterXml $group $index $mode $payload.register.values $config
       $normalizedConfig = if ($mode -eq "cartesian") { [regex]::Replace($config.Trim(), "\s+", " ") } else { $config }
       $expected = [pscustomobject]@{ group = $group; index = $index; comment = $comment.Trim(); mode = $mode; config = $normalizedConfig; values = $payload.register.values }
       $original = $registers | Where-Object { $_.group -eq $group -and $_.index -eq $index } | Select-Object -First 1
@@ -1618,7 +1617,7 @@ function Handle-RobotPositionRegisterRequest {
       $htcgOrigin = Get-RobotHtcgOrigin $connection.HttpOrigin
 
       try {
-        Send-RobotCometPositionRegister $htcgOrigin $group $index $cometValue
+        Send-RobotXmlVariablePayload $htcgOrigin $writeXml
         if ([string]$original.comment -ne $comment.Trim()) {
           Set-RobotPositionRegisterComment $connection.HttpOrigin $index $comment.Trim()
         }
@@ -1638,11 +1637,11 @@ function Handle-RobotPositionRegisterRequest {
         $rollbackError = ""
         try {
           if ([string]$original.mode -eq "uninitialized") {
-            throw "Automatic rollback to an uninitialized Position Register is not supported by this controller."
+            $rollbackXml = Format-RobotPositionRegisterXml ([int]$original.group) ([int]$original.index) "uninitialized" $original.values ([string]$original.config) -AllowUninitialized
+          } else {
+            $rollbackXml = Format-RobotPositionRegisterXml ([int]$original.group) ([int]$original.index) ([string]$original.mode) $original.values ([string]$original.config)
           }
-          $rollbackBlock = Format-RobotPositionRegisterBlock ([int]$original.group) ([int]$original.index) ([string]$original.comment) ([string]$original.mode) $original.values ([string]$original.config)
-          $rollbackValue = ConvertTo-RobotPositionRegisterCometValue $rollbackBlock
-          Send-RobotCometPositionRegister $htcgOrigin ([int]$original.group) ([int]$original.index) $rollbackValue
+          Send-RobotXmlVariablePayload $htcgOrigin $rollbackXml
           if ([string]$original.comment -ne $comment.Trim()) {
             Set-RobotPositionRegisterComment $connection.HttpOrigin ([int]$original.index) ([string]$original.comment)
           }

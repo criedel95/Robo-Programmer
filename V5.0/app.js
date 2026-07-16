@@ -508,6 +508,7 @@ let selectedRobotPositionRegisterKey = "";
 let robotPositionRegistersAddress = "";
 let robotPositionRegistersLoading = false;
 let robotPositionRegisterCommitActive = false;
+let robotPositionRecordedDraftKey = "";
 let robotNumericRegisters = [];
 let robotNumericRegistersAddress = "";
 let robotNumericRegistersLoading = false;
@@ -2144,11 +2145,12 @@ function closeProject() {
     alert("A robot backup is currently running. Wait for it to finish before closing the project.");
     return;
   }
-  stopRobotPositionLive();
   if (project?.files.some((file) => file.dirty)) {
     const shouldClose = confirm("Close this project? Unsaved browser working-copy changes will be cleared from this session.");
     if (!shouldClose) return;
   }
+  if (!confirmDiscardRobotPositionRegisterDraft("close this project")) return;
+  stopRobotPositionLive();
 
   persistProjectWorkspaceLayout();
   closeEditorFind(false);
@@ -2217,6 +2219,7 @@ function loadProject(nextProject) {
   (nextProject.tagStates || []).forEach(([key, state]) => tagStateCache.set(key, state));
   currentFileId = null;
   splitFileId = null;
+  activeAssignmentSheet = assignmentSheetNames[0];
   assignmentWorkbookData = null;
   robotCommentComparison = [];
   robotBackupInventory = [];
@@ -3422,7 +3425,15 @@ function assignmentRowsForRange(workbookData, range) {
     .sort((a, b) => a.index - b.index);
 }
 
+function ensureActiveAssignmentSheet() {
+  if (!assignmentSheetNames.includes(activeAssignmentSheet)) {
+    activeAssignmentSheet = assignmentSheetNames[0];
+  }
+  return activeAssignmentSheet;
+}
+
 function renderAssignmentSheetTabs() {
+  ensureActiveAssignmentSheet();
   assignmentSheetTabs.innerHTML = assignmentSheetNames.map((sheetName) => `
     <button type="button" role="tab" data-sheet="${escapeHtml(sheetName)}" aria-selected="${sheetName === activeAssignmentSheet}" title="Show ${escapeHtml(assignmentSheetLabel(sheetName))} Data Assignments.">
       ${escapeHtml(assignmentSheetLabel(sheetName))}
@@ -3482,6 +3493,7 @@ function renderAssignmentsTable() {
 
 async function loadAssignmentsView(forceReload = false) {
   if (!project) return;
+  ensureActiveAssignmentSheet();
   if (assignmentWorkbookData && !forceReload) {
     renderAssignmentSheetTabs();
     renderAssignmentsTable();
@@ -3503,9 +3515,7 @@ async function loadAssignmentsView(forceReload = false) {
 
     const file = await assignmentFileHandle.getFile();
     assignmentWorkbookData = await readAssignmentWorkbook(new Uint8Array(await file.arrayBuffer()));
-    activeAssignmentSheet = activeAssignmentSheet && assignmentSheetNames.includes(activeAssignmentSheet)
-      ? activeAssignmentSheet
-      : assignmentSheetNames[0];
+    ensureActiveAssignmentSheet();
     renderAssignmentSheetTabs();
     renderAssignmentsTable();
     assignmentStatus.textContent = `Loaded ${assignmentTemplateFileName}. Edit a description cell to update the spreadsheet.`;
@@ -4269,6 +4279,7 @@ function renderRobotOnlineAddressSelect() {
 function setRobotOnlineUi(status, message = "") {
   robotOnlineStatus = status;
   const robotActionsEnabled = status === "online";
+  setRobotLiveEditAvailability(robotActionsEnabled);
   goOnlineBtn.classList.remove("offline", "connecting", "online", "failed");
   goOnlineBtn.classList.add(status);
   goOnlineBtn.disabled = false;
@@ -5716,6 +5727,21 @@ function applyRobotPrEditState() {
   updateRobotLiveEditingIndicator();
 }
 
+function setRobotLiveEditAvailability(available) {
+  [robotRegistersEditToggle, robotPrEditToggle].forEach((toggle) => {
+    const label = toggle.closest("label");
+    if (label && !label.dataset.enabledTitle) label.dataset.enabledTitle = label.title;
+    toggle.disabled = !available;
+    label?.classList.toggle("disabled", !available);
+    if (label) {
+      label.title = available
+        ? label.dataset.enabledTitle
+        : "Go online with a robot to enable live edits.";
+    }
+  });
+  if (!available) resetRobotLiveEditModes();
+}
+
 function updateRobotLiveEditingIndicator() {
   robotPositionWorkspaceTab.classList.toggle("live-editing-armed", robotRegisterEditsEnabled() || robotPrEditsEnabled());
 }
@@ -5807,13 +5833,16 @@ function renderRobotPositionRegisterDetails() {
       <div id="robotPrJointFields" class="robot-pr-mode-fields" ${draft.mode === "joint" ? "" : "hidden"}>
         <div class="robot-pr-axis-fields">${robotPositionRegisterAxisFields(jointAxes, jointValues)}</div>
       </div>
-      <div class="robot-pr-warning">Committing writes this Position Register to the online robot. Confirm the selected robot, register number, representation, configuration, and values before continuing.</div>
+      <div class="robot-pr-warning">Record Current Position loads a fresh physical-robot position into this form without writing it. Commit Changes is the only action that writes the Position Register to the online robot.</div>
       <div class="robot-pr-actions">
         <span id="robotPrDirtyStatus">No pending changes.</span>
+        <button id="robotPrRevertRecordedBtn" class="robot-pr-revert-button" type="button" hidden title="Discard the recorded draft and restore the last verified robot values for PR[${register.index}].">Revert to Original</button>
+        <button id="robotPrRecordBtn" class="robot-pr-record-button" type="button" disabled title="Load the physical robot's current position into the PR[${register.index}] form without writing it.">Record Current Position</button>
         <button id="robotPrCommitBtn" type="submit" disabled title="Write the edited values for PR[${register.index}] to the online robot after confirmation.">Commit Changes</button>
       </div>
     </form>
   `;
+  updateRobotPositionRegisterDirtyState();
 }
 
 function collectRobotPositionRegisterForm() {
@@ -5845,20 +5874,59 @@ function collectRobotPositionRegisterForm() {
   };
 }
 
+function robotPositionRegisterFormIsDirty() {
+  const register = selectedRobotPositionRegister();
+  const form = document.querySelector("#robotPrForm");
+  if (!register || !form) return false;
+  try {
+    return JSON.stringify(collectRobotPositionRegisterForm()) !== JSON.stringify(editableRobotPositionRegister(register));
+  } catch {
+    return true;
+  }
+}
+
+function discardRobotPositionRegisterDraft() {
+  if (!selectedRobotPositionRegister()) return;
+  robotPositionRecordedDraftKey = "";
+  renderRobotPositionRegisterDetails();
+}
+
+function confirmDiscardRobotPositionRegisterDraft(action) {
+  if (!robotPositionRegisterFormIsDirty()) return true;
+  const register = selectedRobotPositionRegister();
+  const shouldDiscard = confirm(
+    `PR[${register.index}] has uncommitted changes.\n\n`
+    + `If you ${action}, those changes will be discarded.\n\nContinue and discard the changes?`
+  );
+  if (shouldDiscard) discardRobotPositionRegisterDraft();
+  return shouldDiscard;
+}
+
 function updateRobotPositionRegisterDirtyState() {
   const register = selectedRobotPositionRegister();
   const commitButton = document.querySelector("#robotPrCommitBtn");
+  const recordButton = document.querySelector("#robotPrRecordBtn");
+  const revertButton = document.querySelector("#robotPrRevertRecordedBtn");
   const dirtyStatus = document.querySelector("#robotPrDirtyStatus");
-  if (!register || !commitButton || !dirtyStatus) return;
+  if (!register || !commitButton || !recordButton || !revertButton || !dirtyStatus) return;
+  const writeDisabled = !robotPrEditsEnabled() || robotPositionRegisterCommitActive || robotOnlineStatus !== "online";
+  recordButton.disabled = writeDisabled;
   try {
     const current = collectRobotPositionRegisterForm();
     const baseline = editableRobotPositionRegister(register);
     const dirty = JSON.stringify(current) !== JSON.stringify(baseline);
-    commitButton.disabled = !robotPrEditsEnabled() || !dirty || robotPositionRegisterCommitActive || robotOnlineStatus !== "online";
+    const registerKey = robotPositionRegisterKey(register);
+    if (!dirty && robotPositionRecordedDraftKey === registerKey) robotPositionRecordedDraftKey = "";
+    const recordedDraftActive = dirty && robotPositionRecordedDraftKey === registerKey;
+    revertButton.hidden = !recordedDraftActive;
+    revertButton.disabled = writeDisabled;
+    commitButton.disabled = writeDisabled || !dirty;
     dirtyStatus.textContent = robotPrEditsEnabled()
       ? (dirty ? "Pending changes have not been written." : "No pending changes.")
       : "Enable edits to change this Position Register.";
   } catch (error) {
+    revertButton.hidden = robotPositionRecordedDraftKey !== robotPositionRegisterKey(register);
+    revertButton.disabled = writeDisabled;
     commitButton.disabled = true;
     dirtyStatus.textContent = error.message;
   }
@@ -5870,6 +5938,7 @@ function resetRobotPositionRegisters() {
   robotPositionRegistersAddress = "";
   robotPositionRegistersLoading = false;
   robotPositionRegisterCommitActive = false;
+  robotPositionRecordedDraftKey = "";
   robotPrSearch.value = "";
   robotPrList.innerHTML = "";
   robotPrDetails.classList.add("muted-position");
@@ -5909,6 +5978,155 @@ async function readRobotPositionRegisters({ force = false } = {}) {
   }
 }
 
+function currentRobotPositionRegisterTarget(snapshot) {
+  const selected = selectedRobotPositionRegister();
+  const form = document.querySelector("#robotPrForm");
+  if (!selected || !form) throw new Error("Select a Position Register before recording.");
+  const group = Number(selected.group);
+  const snapshotGroup = Number(snapshot?.group);
+  if (!Number.isInteger(snapshotGroup) || snapshotGroup < 1) {
+    throw new Error("The robot did not report a readable current motion group.");
+  }
+  if (snapshotGroup !== group) {
+    throw new Error(`The robot's current position is for motion group ${snapshotGroup}, but PR[${selected.index}] is in group ${group}.`);
+  }
+
+  const mode = form.querySelector("#robotPrMode")?.value === "joint" ? "joint" : "cartesian";
+  const comment = form.querySelector("#robotPrComment")?.value.trim() || "";
+  if (comment.includes("'")) throw new Error("Position Register comments cannot contain an apostrophe.");
+
+  if (mode === "joint") {
+    const externalAxes = Array.isArray(snapshot.jointExtAxes) ? snapshot.jointExtAxes : [];
+    if (externalAxes.length) {
+      throw new Error("Recording a joint PR with external axes is not supported yet. No robot data was changed.");
+    }
+    const joints = (Array.isArray(snapshot.joints) ? snapshot.joints : [])
+      .map((joint) => ({
+        axis: String(joint.axis || "").toUpperCase(),
+        value: Number(joint.value)
+      }))
+      .filter((joint) => /^J\d+$/.test(joint.axis) && Number.isFinite(joint.value))
+      .sort((a, b) => Number(a.axis.slice(1)) - Number(b.axis.slice(1)));
+    if (!joints.length) throw new Error("The robot did not report readable current joint values.");
+    joints.forEach((joint, index) => {
+      if (joint.axis !== `J${index + 1}`) throw new Error("The robot returned a non-sequential set of joint axes.");
+    });
+    return {
+      register: {
+        group,
+        index: Number(selected.index),
+        comment,
+        mode,
+        config: "",
+        values: Object.fromEntries(joints.map((joint) => [joint.axis, joint.value]))
+      },
+      frame: null,
+      tool: null
+    };
+  }
+
+  const userFrame = snapshot.userFrame || {};
+  const externalAxes = Array.isArray(userFrame.extAxes) ? userFrame.extAxes : [];
+  if (externalAxes.length) {
+    throw new Error("Recording a Cartesian PR with external axes is not supported yet. No robot data was changed.");
+  }
+  const values = {};
+  for (const axis of ["X", "Y", "Z", "W", "P", "R"]) {
+    const value = Number(userFrame.values?.[axis]);
+    if (!Number.isFinite(value)) throw new Error(`The robot did not report a readable current ${axis} value.`);
+    values[axis] = value;
+  }
+  const rawConfig = String(userFrame.config || "").trim();
+  const configMatch = rawConfig.match(/^([NF])\s+([UD])\s+([TB])\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)$/i);
+  if (!configMatch) {
+    throw new Error("The robot did not report a valid current Cartesian configuration.");
+  }
+  const config = `${configMatch[1].toUpperCase()} ${configMatch[2].toUpperCase()} ${configMatch[3].toUpperCase()}, ${configMatch[4]}, ${configMatch[5]}, ${configMatch[6]}`;
+  return {
+    register: {
+      group,
+      index: Number(selected.index),
+      comment,
+      mode,
+      config,
+      values
+    },
+    frame: userFrame.frame ?? snapshot.frame ?? null,
+    tool: userFrame.tool ?? snapshot.tool ?? null
+  };
+}
+
+function loadRobotPositionRegisterDraft(register) {
+  const form = document.querySelector("#robotPrForm");
+  if (!form) throw new Error("The selected Position Register form is unavailable.");
+  const modeSelect = form.querySelector("#robotPrMode");
+  const cartesianFields = form.querySelector("#robotPrCartesianFields");
+  const jointFields = form.querySelector("#robotPrJointFields");
+  modeSelect.value = register.mode;
+  cartesianFields.hidden = register.mode === "joint";
+  jointFields.hidden = register.mode !== "joint";
+
+  if (register.mode === "joint") {
+    const axes = Object.keys(register.values).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+    jointFields.querySelector(".robot-pr-axis-fields").innerHTML = robotPositionRegisterAxisFields(axes, register.values);
+  } else {
+    for (const axis of ["X", "Y", "Z", "W", "P", "R"]) {
+      const input = cartesianFields.querySelector(`[data-pr-axis="${axis}"]`);
+      if (input) input.value = Number(register.values[axis]).toFixed(3);
+    }
+    const config = robotPositionRegisterConfigParts(register.config);
+    form.querySelector("#robotPrFlip").value = config.flip;
+    form.querySelector("#robotPrUp").value = config.up;
+    form.querySelector("#robotPrTop").value = config.top;
+    form.querySelector("#robotPrTurn1").value = String(config.turn1);
+    form.querySelector("#robotPrTurn2").value = String(config.turn2);
+    form.querySelector("#robotPrTurn3").value = String(config.turn3);
+  }
+}
+
+function storeVerifiedRobotPositionRegister(updated) {
+  const arrayIndex = robotPositionRegisters.findIndex((item) => robotPositionRegisterKey(item) === robotPositionRegisterKey(updated));
+  if (arrayIndex >= 0) robotPositionRegisters[arrayIndex] = updated;
+  renderRobotPositionRegisterList();
+  renderRobotPositionRegisterDetails();
+}
+
+async function recordCurrentRobotPositionToRegister() {
+  if (!robotPrEditsEnabled() || robotPositionRegisterCommitActive) return;
+  const selected = selectedRobotPositionRegister();
+  if (!selected) return;
+
+  robotPositionRegisterCommitActive = true;
+  updateRobotPositionRegisterDirtyState();
+  robotPrStatus.textContent = `Reading the current robot position for PR[${selected.index}]...`;
+  try {
+    const robotOrigin = requireOnlineRobot("record the current position to a Position Register");
+    const snapshot = await callRobotExportApi("/robot-position/current", { robotAddress: robotOrigin });
+    const target = currentRobotPositionRegisterTarget(snapshot);
+    const register = target.register;
+    loadRobotPositionRegisterDraft(register);
+    robotPositionRecordedDraftKey = robotPositionRegisterKey(register);
+    const positionContext = register.mode === "cartesian"
+      ? ` using UF ${target.frame ?? "unknown"}, Tool ${target.tool ?? "unknown"}, ${register.config}`
+      : "";
+    robotPrStatus.textContent = `Loaded the current ${register.mode} position${positionContext} into PR[${register.index}]. Press Commit Changes to write it to the robot.`;
+  } catch (error) {
+    robotPrStatus.textContent = `Unable to load the current position: ${error.message}`;
+    throw error;
+  } finally {
+    robotPositionRegisterCommitActive = false;
+    updateRobotPositionRegisterDirtyState();
+  }
+}
+
+function revertRecordedRobotPositionDraft() {
+  const register = selectedRobotPositionRegister();
+  if (!register || robotPositionRecordedDraftKey !== robotPositionRegisterKey(register)) return;
+  robotPositionRecordedDraftKey = "";
+  renderRobotPositionRegisterDetails();
+  robotPrStatus.textContent = `Restored the last verified robot values for PR[${register.index}].`;
+}
+
 async function commitRobotPositionRegister() {
   if (!robotPrEditsEnabled()) return;
   if (robotPositionRegisterCommitActive) return;
@@ -5922,11 +6140,8 @@ async function commitRobotPositionRegister() {
   try {
     const robotOrigin = requireOnlineRobot("write a Position Register");
     const result = await callRobotExportApi("/robot-position-registers/set", { robotAddress: robotOrigin, register });
-    const updated = result.register;
-    const arrayIndex = robotPositionRegisters.findIndex((item) => robotPositionRegisterKey(item) === robotPositionRegisterKey(updated));
-    if (arrayIndex >= 0) robotPositionRegisters[arrayIndex] = updated;
-    renderRobotPositionRegisterList();
-    renderRobotPositionRegisterDetails();
+    robotPositionRecordedDraftKey = "";
+    storeVerifiedRobotPositionRegister(result.register);
     robotPrStatus.textContent = `Committed and verified PR[${register.index}] on ${robotOnlineAddress}.`;
   } catch (error) {
     robotPrStatus.textContent = `Unable to commit PR[${register.index}]: ${error.message}`;
@@ -9306,6 +9521,7 @@ goOnlineBtn.addEventListener("click", () => {
     return;
   }
   if (robotOnlineStatus === "online") {
+    if (!confirmDiscardRobotPositionRegisterDraft("go offline")) return;
     goOffline();
     return;
   }
@@ -9361,6 +9577,7 @@ robotOnlineAddressMenu.addEventListener("click", async (event) => {
   }
 
   if (choiceButton) {
+    if (!confirmDiscardRobotPositionRegisterDraft("switch robots")) return;
     const address = choiceButton.dataset.address;
     await selectRobotOnlineAddress(address).catch((error) => {
       projectStatus.textContent = `Unable to remember robot address for this project: ${error.message}`;
@@ -9402,10 +9619,12 @@ robotOnlineAddressButton.addEventListener("keydown", (event) => {
 });
 
 editorWorkspaceTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("leave Position Registers")) return;
   setWorkspaceView("editor");
 });
 
 assignmentsWorkspaceTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("leave Position Registers")) return;
   setWorkspaceView("assignments");
   if (assignmentsPopoutIsOpen()) focusAssignmentsPopout();
 });
@@ -9414,10 +9633,12 @@ popOutAssignmentsBtn.addEventListener("click", popOutAssignments);
 focusAssignmentsPopoutBtn.addEventListener("click", focusAssignmentsPopout);
 
 robotExportWorkspaceTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("leave Position Registers")) return;
   setWorkspaceView("robot-export");
 });
 
 robotBackupWorkspaceTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("leave Position Registers")) return;
   setWorkspaceView("robot-backup");
 });
 
@@ -9426,14 +9647,17 @@ robotPositionWorkspaceTab.addEventListener("click", () => {
 });
 
 robotLiveOverviewTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("open Live Robot Overview")) return;
   setLiveRobotTool("overview");
 });
 
 robotLiveProgramTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("open Program Monitor")) return;
   setLiveRobotTool("program-monitor");
 });
 
 robotLiveNumericTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("open Registers/Flags")) return;
   setLiveRobotTool("numeric-registers");
 });
 
@@ -9446,6 +9670,10 @@ robotLivePrTab.addEventListener("click", () => {
 });
 
 robotPrEditToggle.addEventListener("change", () => {
+  if (!robotPrEditToggle.checked && !confirmDiscardRobotPositionRegisterDraft("disable Position Register edits")) {
+    robotPrEditToggle.checked = true;
+    return;
+  }
   applyRobotPrEditState();
   projectStatus.textContent = robotPrEditsEnabled()
     ? "Position Register edits are enabled."
@@ -9457,6 +9685,7 @@ robotPrSearch.addEventListener("input", renderRobotPositionRegisterList);
 robotPrList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-pr-key]");
   if (!button) return;
+  if (button.dataset.prKey !== selectedRobotPositionRegisterKey && !confirmDiscardRobotPositionRegisterDraft("open another Position Register")) return;
   selectedRobotPositionRegisterKey = button.dataset.prKey;
   renderRobotPositionRegisterList();
   renderRobotPositionRegisterDetails();
@@ -9477,6 +9706,14 @@ robotPrDetails.addEventListener("change", (event) => {
     if (jointFields) jointFields.hidden = !jointMode;
   }
   updateRobotPositionRegisterDirtyState();
+});
+
+robotPrDetails.addEventListener("click", (event) => {
+  if (event.target.id === "robotPrRecordBtn") {
+    recordCurrentRobotPositionToRegister().catch(() => {});
+  } else if (event.target.id === "robotPrRevertRecordedBtn") {
+    revertRecordedRobotPositionDraft();
+  }
 });
 
 robotPrDetails.addEventListener("submit", (event) => {
@@ -10644,7 +10881,7 @@ window.addEventListener("beforeunload", (event) => {
   persistProjectWorkspaceLayout();
   persistSession();
   if (assignmentsPopoutIsOpen()) assignmentsPopoutWindow.close();
-  if (!robotBackupActive) return;
+  if (!robotBackupActive && !robotPositionRegisterFormIsDirty()) return;
   event.preventDefault();
   event.returnValue = "";
 });
