@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 32
+$serverApiVersion = 33
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -927,6 +927,95 @@ function Send-RobotCometPositionRegister {
   if ($null -eq $rpc -or [string]$rpc.status -notin @("0", "0x0")) {
     $message = if ($null -ne $rpc -and $rpc.message) { [string]$rpc.message } else { "Unknown controller error." }
     throw "The robot rejected the Position Register write: $message"
+  }
+}
+
+function Handle-LsFileExportRequest {
+  param(
+    [System.Net.Sockets.NetworkStream]$Stream,
+    [string]$RequestBody
+  )
+
+  try {
+    $payload = $RequestBody | ConvertFrom-Json
+    $requestedFiles = @($payload.files)
+    if (-not $requestedFiles.Count) { throw "Select at least one LS file to export." }
+    if ($requestedFiles.Count -gt 500) { throw "No more than 500 LS files can be exported at once." }
+
+    $safeFiles = New-Object System.Collections.Generic.List[object]
+    $seenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $requestedFiles) {
+      $name = ([string]$item.name).Trim()
+      $unsafeName = [string]::IsNullOrWhiteSpace($name) -or
+        [System.IO.Path]::GetFileName($name) -cne $name -or
+        [System.IO.Path]::GetExtension($name) -ine ".LS" -or
+        $name.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0
+      if ($unsafeName) {
+        throw "LS export contains an unsafe filename: $name"
+      }
+      if (-not $seenNames.Add($name)) { throw "LS export contains a duplicate filename: $name" }
+      $safeFiles.Add([pscustomobject]@{ name = $name; content = [string]$item.content })
+    }
+
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    try {
+      $dialog.Description = "Choose where to export $($safeFiles.Count) Robo Programmer LS file$(if ($safeFiles.Count -eq 1) { '' } else { 's' })."
+      $dialog.ShowNewFolderButton = $true
+      $documentsPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
+      if (-not [string]::IsNullOrWhiteSpace($documentsPath)) { $dialog.SelectedPath = $documentsPath }
+      $dialogResult = $dialog.ShowDialog()
+      if ($dialogResult -ne [System.Windows.Forms.DialogResult]::OK -or [string]::IsNullOrWhiteSpace($dialog.SelectedPath)) {
+        Send-JsonResponse $Stream 200 "OK" @{ ok = $true; cancelled = $true }
+        return
+      }
+      $destinationPath = [System.IO.Path]::GetFullPath($dialog.SelectedPath)
+    } finally {
+      $dialog.Dispose()
+    }
+
+    if (-not (Test-Path -LiteralPath $destinationPath -PathType Container)) {
+      throw "The selected export folder is unavailable."
+    }
+    $conflicts = @($safeFiles | Where-Object { Test-Path -LiteralPath (Join-Path $destinationPath $_.name) -PathType Leaf })
+    if ($conflicts.Count) {
+      $conflictNames = @($conflicts | Select-Object -First 10 | ForEach-Object { $_.name })
+      $remaining = $conflicts.Count - $conflictNames.Count
+      $conflictText = ($conflictNames -join "`r`n")
+      if ($remaining -gt 0) { $conflictText += "`r`n...and $remaining more" }
+      $choice = [System.Windows.Forms.MessageBox]::Show(
+        "$($conflicts.Count) LS file$(if ($conflicts.Count -eq 1) { ' already exists' } else { 's already exist' }) in this folder. Overwrite?`r`n`r`n$conflictText",
+        "Robo Programmer - Confirm LS Export",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+      )
+      if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Send-JsonResponse $Stream 200 "OK" @{ ok = $true; cancelled = $true }
+        return
+      }
+    }
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $exported = New-Object System.Collections.Generic.List[string]
+    $failures = New-Object System.Collections.Generic.List[object]
+    foreach ($file in $safeFiles) {
+      try {
+        [System.IO.File]::WriteAllText((Join-Path $destinationPath $file.name), $file.content, $encoding)
+        $exported.Add($file.name)
+      } catch {
+        $failures.Add([pscustomobject]@{ name = $file.name; error = $_.Exception.Message })
+      }
+    }
+    Send-JsonResponse $Stream 200 "OK" @{
+      ok = $true
+      cancelled = $false
+      destination = $destinationPath
+      exported = @($exported)
+      failures = @($failures)
+    }
+  } catch {
+    Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
   }
 }
 
@@ -2036,6 +2125,11 @@ try {
 
       if ($method -eq "POST" -and $pathOnly -eq "/project-path/resolve") {
         Handle-ProjectPathRequest $stream $requestBody
+        continue
+      }
+
+      if ($method -eq "POST" -and $pathOnly -eq "/ls-files/export") {
+        Handle-LsFileExportRequest $stream $requestBody
         continue
       }
 

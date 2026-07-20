@@ -22,6 +22,7 @@
                 <button id="openRoboProjectBtn" type="button" role="menuitem">Open ROBO Package</button>
                 <button id="exportRoboProjectBtn" type="button" role="menuitem">Export Project as ROBO</button>
                 <button id="saveBtn" type="button" role="menuitem">Save</button>
+                <button id="exportLsToFileBtn" type="button" role="menuitem" title="Export the active LS file, or the LS files selected in the project panel, as individual files to a chosen Windows folder.">Export LS to File</button>
                 <button id="reloadAssignmentsBtn" type="button" role="menuitem" title="Reload comments from Data Assignments.xlsx and refresh the Data Assignments view. Use this after the spreadsheet was edited outside Robo Programmer.">Reload Comments From Spreadsheet</button>
                 <button id="pushAssignmentsMenuBtn" type="button" role="menuitem" title="Update Data Assignments.xlsx from changed visible edits and LS-derived descriptions. Automatic cell edits usually handle this already.">Push LS Descriptions to Data Assignments</button>
                 <button id="syncAssignmentsMenuBtn" type="button" role="menuitem" title="Apply the spreadsheet descriptions across LS files and backfill blank spreadsheet names from LS comments. Use this after outside edits or repair work.">Sync Data Assignments to LS Files</button>
@@ -97,14 +98,29 @@
                 <span class="eyebrow">Project</span>
                 <strong id="projectName">No project</strong>
               </div>
-              <button id="refreshFilesBtn" class="icon-button" type="button" title="Refresh LS files" aria-label="Refresh LS files">Refresh</button>
+              <div class="project-header-actions">
+                <button id="selectFilesBtn" class="icon-button" type="button" title="Select multiple LS files" aria-label="Select multiple LS files">Select</button>
+                <button id="refreshFilesBtn" class="icon-button" type="button" title="Refresh LS files" aria-label="Refresh LS files">Refresh</button>
+              </div>
             </div>
             <div id="fileList" class="file-list"></div>
             <div class="project-footer">
-              <button id="saveCurrentLsBtn" type="button" disabled>Save Current LS</button>
-              <button id="newLsBtn" type="button">New LS</button>
-              <button id="loadLsFromRobotBtn" type="button" hidden title="Download the currently selected LS file from the online robot, archive the current project copy in Trash with a timestamp, and replace it with the robot version.">Load LS from Robot</button>
-              <button id="deleteLsBtn" class="danger-button" type="button">Delete LS</button>
+              <div id="projectFileActions" class="project-file-actions">
+                <button id="saveCurrentLsBtn" type="button" disabled>Save Current LS</button>
+                <button id="newLsBtn" type="button">New LS</button>
+                <button id="loadLsFromRobotBtn" type="button" hidden title="Download the currently selected LS file from the online robot, archive the current project copy in Trash with a timestamp, and replace it with the robot version.">Load LS from Robot</button>
+                <button id="deleteLsBtn" class="danger-button" type="button">Delete LS</button>
+              </div>
+              <div id="projectBulkActions" class="project-bulk-actions" hidden>
+                <strong id="selectedFileCount">0 files selected</strong>
+                <div class="project-bulk-selection-controls">
+                  <button id="selectAllFilesBtn" type="button">Select All</button>
+                  <button id="clearSelectedFilesBtn" type="button">Clear</button>
+                </div>
+                <button id="saveSelectedLsBtn" type="button" disabled>Save Selected</button>
+                <button id="deleteSelectedLsBtn" class="danger-button" type="button" disabled>Delete Selected</button>
+                <button id="cancelFileSelectionBtn" type="button">Cancel Selection</button>
+              </div>
             </div>
           </aside>
 
@@ -429,6 +445,10 @@
             </div>
             <div class="assignments-actions">
               <div id="assignmentPath" class="assignment-path">Spreadsheet path: No project open</div>
+              <label id="assignmentLiveEditsControl" class="robot-register-edit-toggle assignment-live-edit-toggle" aria-description="When enabled, supported description changes are written immediately to the online robot, Data Assignments.xlsx, and matching LS descriptions. Live Edits turns off automatically when you go offline." data-tooltip="When enabled, supported description changes are written immediately to the online robot, Data Assignments.xlsx, and matching LS descriptions. Live Edits turns off automatically when you go offline." hidden>
+                <input id="assignmentLiveEditsToggle" type="checkbox">
+                <span>Enable Live Edits</span>
+              </label>
               <button id="popOutAssignmentsBtn" type="button" title="Move Data Assignments into a separate browser window and return the main window to the LS Editor.">Pop-out</button>
             </div>
           </div>

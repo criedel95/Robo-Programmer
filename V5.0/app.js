@@ -116,6 +116,8 @@ const assignmentSheetTabs = document.querySelector("#assignmentSheetTabs");
 const assignmentStatus = document.querySelector("#assignmentStatus");
 const assignmentPath = document.querySelector("#assignmentPath");
 const assignmentTableWrap = document.querySelector("#assignmentTableWrap");
+const assignmentLiveEditsControl = document.querySelector("#assignmentLiveEditsControl");
+const assignmentLiveEditsToggle = document.querySelector("#assignmentLiveEditsToggle");
 const popOutAssignmentsBtn = document.querySelector("#popOutAssignmentsBtn");
 const focusAssignmentsPopoutBtn = document.querySelector("#focusAssignmentsPopoutBtn");
 const assignmentsPopoutPlaceholder = document.querySelector("#assignmentsPopoutPlaceholder");
@@ -142,6 +144,15 @@ const currentFileNameEl = document.querySelector("#currentFileName");
 const copyCurrentPathBtn = document.querySelector("#copyCurrentPathBtn");
 const creatorCredit = document.querySelector("#creatorCredit");
 const fileListEl = document.querySelector("#fileList");
+const selectFilesBtn = document.querySelector("#selectFilesBtn");
+const projectFileActions = document.querySelector("#projectFileActions");
+const projectBulkActions = document.querySelector("#projectBulkActions");
+const selectedFileCount = document.querySelector("#selectedFileCount");
+const selectAllFilesBtn = document.querySelector("#selectAllFilesBtn");
+const clearSelectedFilesBtn = document.querySelector("#clearSelectedFilesBtn");
+const saveSelectedLsBtn = document.querySelector("#saveSelectedLsBtn");
+const deleteSelectedLsBtn = document.querySelector("#deleteSelectedLsBtn");
+const cancelFileSelectionBtn = document.querySelector("#cancelFileSelectionBtn");
 const newLsBtn = document.querySelector("#newLsBtn");
 const loadLsFromRobotBtn = document.querySelector("#loadLsFromRobotBtn");
 const saveCurrentLsBtn = document.querySelector("#saveCurrentLsBtn");
@@ -180,6 +191,7 @@ const fileMenu = document.querySelector("#fileMenu");
 const openProjectBtn = document.querySelector("#openProjectBtn");
 const newProjectBtn = document.querySelector("#newProjectBtn");
 const saveBtn = document.querySelector("#saveBtn");
+const exportLsToFileBtn = document.querySelector("#exportLsToFileBtn");
 const closeProjectBtn = document.querySelector("#closeProjectBtn");
 const refreshFilesBtn = document.querySelector("#refreshFilesBtn");
 const openRoboProjectBtn = document.querySelector("#openRoboProjectBtn");
@@ -460,6 +472,8 @@ let visibleSuggestions = [];
 let project = null;
 let currentFileId = null;
 let splitFileId = null;
+let fileSelectionMode = false;
+let selectedFileIds = new Set();
 let activeEditorName = "main";
 let headerVisible = false;
 let footerVisible = false;
@@ -480,6 +494,7 @@ let activeAssignmentSheet = "";
 let assignmentWorkbookData = null;
 let assignmentsPopoutWindow = null;
 let assignmentsPopoutMonitor = null;
+let assignmentLiveEditsAvailable = false;
 let robotCommentComparison = [];
 let robotCommentTypeFilterValue = "all";
 let robotCommentDifferenceFilterValue = "all";
@@ -637,6 +652,14 @@ const robotCommentCategories = [
   { readCode: 35, types: [{ type: "AI", writeCode: 12, limit: 24 }, { type: "AO", writeCode: 13, limit: 24 }] },
   { readCode: 76, types: [{ type: "F", writeCode: 19, limit: 24 }] }
 ];
+
+const robotCommentConfigByType = new Map(robotCommentCategories.flatMap((category) =>
+  category.types.map((typeConfig) => [typeConfig.type, { ...typeConfig, readCode: category.readCode }])
+));
+
+function robotCommentConfigForType(type) {
+  return robotCommentConfigByType.get(String(type || "").toUpperCase()) || null;
+}
 
 function assignmentSheetLabel(sheetName) {
   return sheetName === "PR" ? "Position Registers" : sheetName;
@@ -1686,14 +1709,7 @@ async function deleteCurrentLsFile() {
   saveSplitBuffer();
   const deletedIndex = project.files.findIndex((item) => item.id === file.id);
   const trashDirectoryHandle = await project.lsDirectoryHandle.getDirectoryHandle("Trash", { create: true });
-  const trashFileName = timestampedTrashFileName(file.name);
-  await writeTextFile(trashDirectoryHandle, trashFileName, file.content);
-
-  try {
-    await project.lsDirectoryHandle.removeEntry(file.name);
-  } catch (error) {
-    if (error.name !== "NotFoundError") throw error;
-  }
+  const trashFileName = await moveLsFileToTrash(file, trashDirectoryHandle);
 
   project.files = project.files.filter((item) => item.id !== file.id);
   await persistProjectFavorites();
@@ -1712,6 +1728,17 @@ async function deleteCurrentLsFile() {
 
   projectStatus.textContent = `Moved ${file.name} to LS Files\\Trash as ${trashFileName}.`;
   persistSession();
+}
+
+async function moveLsFileToTrash(file, trashDirectoryHandle) {
+  const trashFileName = timestampedTrashFileName(file.name);
+  await writeTextFile(trashDirectoryHandle, trashFileName, file.content);
+  try {
+    await project.lsDirectoryHandle.removeEntry(file.name);
+  } catch (error) {
+    if (error.name !== "NotFoundError") throw error;
+  }
+  return trashFileName;
 }
 
 function updateLoadLsFromRobotButton() {
@@ -2158,8 +2185,11 @@ function closeProject() {
   popInAssignments();
 
   project = null;
+  setAssignmentLiveEditAvailability(false);
   currentFileId = null;
   splitFileId = null;
+  fileSelectionMode = false;
+  selectedFileIds.clear();
   assignmentWorkbookData = null;
   robotCommentComparison = [];
   robotExportConnected = false;
@@ -2185,6 +2215,7 @@ function closeProject() {
   projectNameEl.textContent = "No project";
   projectStatus.textContent = "Open or create a robot project to begin.";
   fileListEl.innerHTML = "";
+  updateFileSelectionControls();
   diagnosticsEl.className = "diagnostics empty";
   diagnosticsEl.textContent = "No checks run yet.";
   setWorkspaceView("editor");
@@ -2219,8 +2250,12 @@ function loadProject(nextProject) {
   (nextProject.tagStates || []).forEach(([key, state]) => tagStateCache.set(key, state));
   currentFileId = null;
   splitFileId = null;
+  fileSelectionMode = false;
+  selectedFileIds.clear();
   activeAssignmentSheet = assignmentSheetNames[0];
   assignmentWorkbookData = null;
+  assignmentLiveEditsToggle.checked = false;
+  setAssignmentLiveEditAvailability(robotOnlineStatus === "online");
   robotCommentComparison = [];
   robotBackupInventory = [];
   robotBackupConnected = false;
@@ -3408,11 +3443,13 @@ function updateProjectActionVisibility() {
   openRoboProjectBtn.hidden = projectOpen;
   exportRoboProjectBtn.hidden = !projectOpen;
   saveBtn.hidden = !projectOpen;
+  exportLsToFileBtn.hidden = !projectOpen;
   reloadAssignmentsBtn.hidden = !projectOpen;
   pushAssignmentsMenuBtn.hidden = !projectOpen;
   syncAssignmentsMenuBtn.hidden = !projectOpen;
   closeProjectBtn.hidden = !projectOpen;
   updateCopyCurrentPathButton();
+  updateExportLsToFileButton();
 }
 
 function assignmentRangesForSheet(sheetName) {
@@ -3441,6 +3478,42 @@ function renderAssignmentSheetTabs() {
   `).join("");
 }
 
+function assignmentLiveEditsEnabled() {
+  return Boolean(project && assignmentLiveEditsAvailable && assignmentLiveEditsToggle.checked && robotOnlineStatus === "online");
+}
+
+function applyAssignmentLiveEditState({ render = true } = {}) {
+  const enabled = assignmentLiveEditsEnabled();
+  assignmentsView.classList.toggle("live-editing-enabled", enabled);
+  assignmentsWorkspaceTab.classList.toggle("live-editing-armed", enabled);
+  const label = assignmentLiveEditsControl.querySelector("span");
+  if (label) label.textContent = enabled ? "Live Edits Enabled" : "Enable Live Edits";
+  if (render && assignmentWorkbookData) renderAssignmentsTable();
+}
+
+function setAssignmentLiveEditAvailability(available) {
+  const nextAvailable = Boolean(available && project);
+  const changed = assignmentLiveEditsAvailable !== nextAvailable;
+  assignmentLiveEditsAvailable = nextAvailable;
+  assignmentLiveEditsControl.hidden = !nextAvailable;
+  assignmentLiveEditsToggle.disabled = !nextAvailable;
+  if (!nextAvailable) assignmentLiveEditsToggle.checked = false;
+  if (changed || !nextAvailable) applyAssignmentLiveEditState();
+}
+
+function setAssignmentLiveEdits(enabled, { announce = true } = {}) {
+  const nextEnabled = Boolean(enabled && assignmentLiveEditsAvailable && project && robotOnlineStatus === "online");
+  const changed = assignmentLiveEditsToggle.checked !== nextEnabled;
+  assignmentLiveEditsToggle.checked = nextEnabled;
+  applyAssignmentLiveEditState({ render: changed });
+  if (announce) {
+    assignmentStatus.textContent = nextEnabled
+      ? "Live edits enabled. Supported description changes will update the online robot and Data Assignments.xlsx."
+      : "Live edits disabled. Description changes update Data Assignments.xlsx only.";
+  }
+  return assignmentPopoutSnapshot();
+}
+
 function renderAssignmentsTable() {
   if (!assignmentWorkbookData) {
     assignmentTableWrap.innerHTML = "";
@@ -3450,22 +3523,34 @@ function renderAssignmentsTable() {
   const ranges = assignmentRangesForSheet(activeAssignmentSheet);
   const sections = ranges.map((range) => {
     const rows = assignmentRowsForRange(assignmentWorkbookData, range);
-    const body = rows.length ? rows.map((row) => `
-      <tr>
-        <td class="assignment-type">${escapeHtml(row.type)}</td>
-        <td class="assignment-index">${row.index}</td>
-        <td>
-          <input
-            class="assignment-description-input"
-            type="text"
-            maxlength="32"
-            value="${escapeHtml(row.description)}"
-            data-type="${escapeHtml(row.type)}"
-            data-index="${row.index}"
-            aria-label="${escapeHtml(`${row.type}[${row.index}] description`)}">
-        </td>
-      </tr>
-    `).join("") : `
+    const liveEnabled = assignmentLiveEditsEnabled();
+    const body = rows.length ? rows.map((row) => {
+      const liveConfig = robotCommentConfigForType(row.type);
+      const liveLocked = liveEnabled && !liveConfig;
+      const liveTitle = liveLocked
+        ? `${row.type} comments cannot be written live by this controller interface. Disable Live Edits to edit the spreadsheet only.`
+        : liveEnabled
+          ? `Changes write immediately to ${row.type}[${row.index}] on the online robot and Data Assignments.xlsx.`
+          : `${row.type}[${row.index}] description`;
+      return `
+        <tr>
+          <td class="assignment-type">${escapeHtml(row.type)}</td>
+          <td class="assignment-index">${row.index}</td>
+          <td>
+            <input
+              class="assignment-description-input${liveLocked ? " live-edit-unsupported" : ""}"
+              type="text"
+              maxlength="${liveEnabled && liveConfig ? liveConfig.limit : 32}"
+              value="${escapeHtml(row.description)}"
+              data-type="${escapeHtml(row.type)}"
+              data-index="${row.index}"
+              title="${escapeHtml(liveTitle)}"
+              ${liveLocked ? "disabled" : ""}
+              aria-label="${escapeHtml(`${row.type}[${row.index}] description`)}">
+          </td>
+        </tr>
+      `;
+    }).join("") : `
       <tr>
         <td colspan="3" class="assignment-empty">No ${escapeHtml(range.type)} rows were found in this workbook sheet.</td>
       </tr>
@@ -3493,6 +3578,7 @@ function renderAssignmentsTable() {
 
 async function loadAssignmentsView(forceReload = false) {
   if (!project) return;
+  setAssignmentLiveEditAvailability(robotOnlineStatus === "online");
   ensureActiveAssignmentSheet();
   if (assignmentWorkbookData && !forceReload) {
     renderAssignmentSheetTabs();
@@ -3531,12 +3617,15 @@ function assignmentsPopoutIsOpen() {
 }
 
 function assignmentPopoutSnapshot() {
+  const liveEnabled = assignmentLiveEditsEnabled();
   const ranges = assignmentWorkbookData ? assignmentRangesForSheet(activeAssignmentSheet).map((range) => ({
     type: range.type,
     rows: assignmentRowsForRange(assignmentWorkbookData, range).map((row) => ({
       type: row.type,
       index: row.index,
-      description: row.description || ""
+      description: row.description || "",
+      liveSupported: Boolean(robotCommentConfigForType(row.type)),
+      maxLength: liveEnabled && robotCommentConfigForType(row.type) ? robotCommentConfigForType(row.type).limit : 32
     }))
   })) : [];
   return {
@@ -3545,6 +3634,8 @@ function assignmentPopoutSnapshot() {
     theme: document.body.dataset.theme || "dark",
     path: assignmentPath.textContent,
     status: assignmentStatus.textContent,
+    liveEditsAvailable: assignmentLiveEditsAvailable,
+    liveEditsEnabled: liveEnabled,
     activeSheet: activeAssignmentSheet,
     sheets: assignmentSheetNames.map((name) => ({ name, label: assignmentSheetLabel(name) })),
     ranges
@@ -3611,10 +3702,12 @@ function popOutAssignments() {
 
 async function saveAssignmentDescriptionFromPopout(type, index, description) {
   const cleaned = cleanAssignmentName(description);
-  const changed = await saveAssignmentDescription(type, index, cleaned);
+  const { changed, live } = await saveDataAssignmentEdit(type, index, cleaned);
   if (changed) {
     const updatedFileCount = syncAssignmentChangeToLsFiles(type, index, cleaned);
-    assignmentStatus.textContent = `Saved ${type}[${index}] to ${assignmentTemplateFileName} and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`;
+    assignmentStatus.textContent = live
+      ? `Saved ${type}[${index}] to the online robot and ${assignmentTemplateFileName}, and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`
+      : `Saved ${type}[${index}] to ${assignmentTemplateFileName} and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`;
     renderFileList();
     renderDiagnostics();
     persistSession();
@@ -3631,6 +3724,7 @@ window.RoboAssignmentsPopout = Object.freeze({
     renderAssignmentsTable();
     return assignmentPopoutSnapshot();
   },
+  setLiveEdits: (enabled) => setAssignmentLiveEdits(enabled),
   saveDescription: (type, index, description) => saveAssignmentDescriptionFromPopout(type, index, description),
   popIn: () => popInAssignments(),
   notifyClosed: () => restoreAssignmentsEmbeddedView()
@@ -3751,6 +3845,60 @@ async function saveAssignmentDescription(type, index, description) {
   await writeAssignmentWorkbookData();
   assignmentStatus.textContent = `Saved ${type}[${index}] to ${assignmentTemplateFileName}.`;
   return true;
+}
+
+function updateRobotCommentCaches(type, index, comment) {
+  const normalizedType = String(type || "").toUpperCase();
+  const normalizedIndex = Number(index);
+  const update = (items) => {
+    const item = items.find((candidate) => Number(candidate.index) === normalizedIndex);
+    if (item) item.comment = comment;
+  };
+  if (normalizedType === "R") update(robotNumericRegisters);
+  if (normalizedType === "F") update(robotFlags);
+  if (normalizedType === "PR") update(robotPositionRegisters);
+}
+
+async function saveDataAssignmentEdit(type, index, description) {
+  if (!project || !assignmentWorkbookData) return { changed: false, live: false };
+  const normalizedType = String(type || "").toUpperCase();
+  const normalizedIndex = Number(index);
+  const cleaned = cleanAssignmentName(description);
+  const cell = assignmentWorkbookData.assignmentCells.get(assignmentKey(normalizedType, normalizedIndex));
+  const previousDescription = cleanAssignmentName(cell?.description || "");
+  if (!cell || cleaned === previousDescription) {
+    return { changed: false, live: assignmentLiveEditsEnabled() };
+  }
+
+  const live = assignmentLiveEditsEnabled();
+  if (live) {
+    const config = robotCommentConfigForType(normalizedType);
+    if (!config) {
+      throw new Error(`${normalizedType} comments cannot be written through the live robot interface. Disable Live Edits to update the spreadsheet only.`);
+    }
+    if (cleaned.length > config.limit) {
+      throw new Error(`${normalizedType}[${normalizedIndex}] comments are limited to ${config.limit} characters on the robot.`);
+    }
+    const robotOrigin = requireOnlineRobot("update Data Assignment comments");
+    await callRobotExportApi("/robot-comments/set", {
+      robotAddress: robotOrigin,
+      comment: cleaned,
+      index: normalizedIndex,
+      writeCode: config.writeCode
+    });
+  }
+
+  try {
+    const changed = await saveAssignmentDescription(normalizedType, normalizedIndex, cleaned);
+    if (live && changed) updateRobotCommentCaches(normalizedType, normalizedIndex, cleaned);
+    return { changed, live };
+  } catch (error) {
+    setAssignmentWorkbookDescription(normalizedType, normalizedIndex, previousDescription);
+    if (live) {
+      throw new Error(`The robot was updated, but ${assignmentTemplateFileName} could not be saved: ${error.message} Retry the same description after restoring spreadsheet access.`);
+    }
+    throw error;
+  }
 }
 
 function normalizeRobotAddress(value) {
@@ -4280,6 +4428,7 @@ function setRobotOnlineUi(status, message = "") {
   robotOnlineStatus = status;
   const robotActionsEnabled = status === "online";
   setRobotLiveEditAvailability(robotActionsEnabled);
+  setAssignmentLiveEditAvailability(robotActionsEnabled);
   goOnlineBtn.classList.remove("offline", "connecting", "online", "failed");
   goOnlineBtn.classList.add(status);
   goOnlineBtn.disabled = false;
@@ -5263,8 +5412,6 @@ function renderRobotProgramMonitor(snapshot = {}) {
       <strong class="robot-program-task-name" title="${escapeHtml(activity.current.name)}">${escapeHtml(activity.current.name)}</strong>
       ${robotProgramStatusBadge(activity.current.status)}
       <span class="robot-program-task-program" title="${escapeHtml(activity.current.program)}">${escapeHtml(activity.current.program)}</span>
-      <span class="robot-program-task-type">${escapeHtml(activity.current.type || "—")}</span>
-      <span class="robot-program-task-line">L${escapeHtml(activity.current.line ?? "—")}</span>
     </div>
   ` : "";
   const historyMarkup = activity.history.length ? `
@@ -5275,8 +5422,6 @@ function renderRobotProgramMonitor(snapshot = {}) {
         <strong class="robot-program-task-name" title="${escapeHtml(entry.name || "")}">${escapeHtml(entry.name || "Unknown")}</strong>
         <span class="robot-program-history-time" title="Ended ${escapeHtml(entry.endedAt || "")}">${escapeHtml(robotProgramHistoryTime(entry.endedAt))}</span>
         <span class="robot-program-task-program" title="${escapeHtml(entry.program || entry.routine || "")}">${escapeHtml(entry.program || entry.routine || "—")}</span>
-        <span class="robot-program-task-type">${escapeHtml(entry.type || "—")}</span>
-        <span class="robot-program-task-line">L${escapeHtml(entry.line ?? "—")}</span>
       </div>
     `).join("")}
   ` : "";
@@ -6246,6 +6391,12 @@ function renderSplitHighlight() {
     .split("\n")
     .map((line, index) => highlightLine(line, index, false, pendingLines.has(index)))
     .join("");
+  applyEditorFindHighlight({
+    name: "split",
+    textarea: splitEditor,
+    file: getSplitFile(),
+    highlighted: splitHighlightedCode
+  });
   splitHighlightedCode.scrollTop = splitEditor.scrollTop;
   splitHighlightedCode.scrollLeft = splitEditor.scrollLeft;
 }
@@ -6396,6 +6547,7 @@ function markCurrentFileDirty() {
 }
 
 function setActiveEditor(name) {
+  const previousName = activeEditorName;
   if (name === "split" && splitEditorPane.hidden) {
     activeEditorName = "main";
     updateSaveCurrentLsButton();
@@ -6404,7 +6556,13 @@ function setActiveEditor(name) {
 
   activeEditorName = name;
   updateSaveCurrentLsButton();
-  if (!editorFindBar.hidden) refreshEditorFind();
+  if (!editorFindBar.hidden) {
+    if (previousName !== activeEditorName) {
+      renderHighlight();
+      if (!splitEditorPane.hidden) renderSplitHighlight();
+    }
+    refreshEditorFind();
+  }
 }
 
 function activeEditorState() {
@@ -7014,6 +7172,54 @@ function selectedEditorFindMatchIndex(matches, state = activeEditorState()) {
   ));
 }
 
+function wrapEditorFindMatch(container, start, length) {
+  if (!container || start < 0 || length <= 0) return;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const end = start + length;
+  let offset = 0;
+  let startNode = null;
+  let startOffset = 0;
+  let endNode = null;
+  let endOffset = 0;
+  let node = walker.nextNode();
+
+  while (node) {
+    const nextOffset = offset + node.nodeValue.length;
+    if (!startNode && start >= offset && start < nextOffset) {
+      startNode = node;
+      startOffset = start - offset;
+    }
+    if (startNode && end > offset && end <= nextOffset) {
+      endNode = node;
+      endOffset = end - offset;
+      break;
+    }
+    offset = nextOffset;
+    node = walker.nextNode();
+  }
+
+  if (!startNode || !endNode) return;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  const marker = document.createElement("mark");
+  marker.className = "editor-find-match";
+  marker.append(range.extractContents());
+  range.insertNode(marker);
+}
+
+function applyEditorFindHighlight(state) {
+  if (editorFindBar.hidden || activeEditorName !== state.name || !state.file || !editorFindInput.value) return;
+  const matches = editorFindMatches(state);
+  const selectedIndex = selectedEditorFindMatchIndex(matches, state);
+  if (selectedIndex < 0) return;
+  const position = lineColumnFromIndex(state.textarea.value, matches[selectedIndex]);
+  const line = state.highlighted.querySelector(`.line[data-line-index="${position.line}"]`);
+  if (!line) return;
+  line.classList.add("editor-find-match-line");
+  wrapEditorFindMatch(line, position.column, editorFindInput.value.length);
+}
+
 function activeEditorCanReplace(state = activeEditorState()) {
   return Boolean(state.file) && !(state.name === "split" && state.textarea.readOnly);
 }
@@ -7052,6 +7258,7 @@ function selectEditorFindMatch(matches, index, state = activeEditorState()) {
   editorFindMatchIndex = (index + matches.length) % matches.length;
   const start = matches[editorFindMatchIndex];
   state.textarea.setSelectionRange(start, start + editorFindInput.value.length);
+  state.renderHighlight();
   scrollToEditorFindMatch(state, start);
   state.updateCursorStatus();
   updateEditorFindControls(matches, state);
@@ -7069,6 +7276,8 @@ function refreshEditorFind({ selectClosest = false } = {}) {
     return;
   } else if (!matches.length) editorFindMatchIndex = -1;
   updateEditorFindControls(matches, state);
+  state.renderHighlight();
+  if (state.name === "main") syncHighlightScroll();
 }
 
 function moveEditorFind(direction) {
@@ -7122,10 +7331,13 @@ function openEditorFind(showReplace = false) {
 
 function closeEditorFind(returnFocus = true) {
   if (editorFindBar.hidden) return;
+  const state = activeEditorState();
   editorFindBar.hidden = true;
   setEditorReplaceExpanded(false);
   editorFindMatchIndex = -1;
-  if (returnFocus && activeEditorState().file) activeEditorState().textarea.focus();
+  state.renderHighlight();
+  if (state.name === "main") syncHighlightScroll();
+  if (returnFocus && state.file) state.textarea.focus();
 }
 
 function finalizeEditorFindMutation(state) {
@@ -7643,6 +7855,160 @@ async function saveAllPendingFiles() {
   persistSession();
 }
 
+function selectedProjectFiles() {
+  if (!project) return [];
+  return project.files.filter((file) => selectedFileIds.has(file.id));
+}
+
+function bulkFileListSummary(files, limit = 10) {
+  const names = files.slice(0, limit).map((file) => `- ${file.name}`);
+  if (files.length > limit) names.push(`- ...and ${files.length - limit} more`);
+  return names.join("\n");
+}
+
+function updateFileSelectionControls() {
+  const availableIds = new Set((project?.files || []).map((file) => file.id));
+  selectedFileIds = new Set([...selectedFileIds].filter((fileId) => availableIds.has(fileId)));
+  const selectedCount = selectedFileIds.size;
+  const fileCount = project?.files.length || 0;
+  selectFilesBtn.disabled = !project || fileCount === 0;
+  selectFilesBtn.setAttribute("aria-pressed", String(fileSelectionMode));
+  selectFilesBtn.textContent = fileSelectionMode ? "Selecting" : "Select";
+  projectFileActions.hidden = fileSelectionMode;
+  projectBulkActions.hidden = !fileSelectionMode;
+  selectedFileCount.textContent = `${selectedCount} file${selectedCount === 1 ? "" : "s"} selected`;
+  selectAllFilesBtn.disabled = fileCount === 0 || selectedCount === fileCount;
+  clearSelectedFilesBtn.disabled = selectedCount === 0;
+  saveSelectedLsBtn.disabled = selectedCount === 0;
+  deleteSelectedLsBtn.disabled = selectedCount === 0;
+  updateExportLsToFileButton();
+}
+
+function setFileSelectionMode(enabled) {
+  fileSelectionMode = Boolean(enabled && project?.files.length);
+  if (!fileSelectionMode) selectedFileIds.clear();
+  renderFileList();
+}
+
+function toggleSelectedFile(fileId, selected) {
+  if (!fileSelectionMode || !project?.files.some((file) => file.id === fileId)) return;
+  if (selected) selectedFileIds.add(fileId);
+  else selectedFileIds.delete(fileId);
+  renderFileList();
+}
+
+async function saveSelectedLsFiles() {
+  if (!project) return;
+  saveCurrentBuffer();
+  saveSplitBuffer();
+  const selectedFiles = selectedProjectFiles();
+  if (!selectedFiles.length) return;
+  const dirtyFiles = selectedFiles.filter((file) => file.dirty);
+  const cleanCount = selectedFiles.length - dirtyFiles.length;
+  const shouldSave = confirm(
+    `Save ${selectedFiles.length} selected LS file${selectedFiles.length === 1 ? "" : "s"}?\n\n`
+    + `${dirtyFiles.length} file${dirtyFiles.length === 1 ? " has" : "s have"} pending changes and will be written.`
+    + (cleanCount ? ` ${cleanCount} already-saved file${cleanCount === 1 ? " will" : "s will"} be skipped.` : "")
+    + `\n\n${bulkFileListSummary(selectedFiles)}`
+  );
+  if (!shouldSave) {
+    projectStatus.textContent = "Save selected files cancelled.";
+    return;
+  }
+  if (!dirtyFiles.length) {
+    projectStatus.textContent = "The selected LS files are already saved.";
+    return;
+  }
+
+  const failedFiles = [];
+  for (const file of dirtyFiles) {
+    try {
+      if (!await saveFileToDisk(file)) failedFiles.push(file.name);
+    } catch {
+      failedFiles.push(file.name);
+    }
+  }
+  renderFileList();
+  renderSplitFileSelect();
+  updateSaveCurrentLsButton();
+  const savedCount = dirtyFiles.length - failedFiles.length;
+  projectStatus.textContent = failedFiles.length
+    ? `Saved ${savedCount} of ${dirtyFiles.length} modified selected LS files. Unable to save: ${failedFiles.join(", ")}.`
+    : `Saved ${savedCount} selected LS file${savedCount === 1 ? "" : "s"}.`;
+  persistSession();
+}
+
+async function deleteSelectedLsFiles() {
+  if (!project) return;
+  const selectedFiles = selectedProjectFiles();
+  if (!selectedFiles.length) return;
+  if (!project.lsDirectoryHandle?.getDirectoryHandle || !project.lsDirectoryHandle?.removeEntry) {
+    projectStatus.textContent = "Reconnect the project folder before deleting LS files so they can be moved to Trash.";
+    return;
+  }
+  const shouldDelete = confirm(
+    `Delete ${selectedFiles.length} selected LS file${selectedFiles.length === 1 ? "" : "s"}?\n\n`
+    + `Each file will be moved to LS Files\\Trash with a timestamped name.\n\n${bulkFileListSummary(selectedFiles)}`
+  );
+  if (!shouldDelete) {
+    projectStatus.textContent = "Delete selected files cancelled.";
+    return;
+  }
+
+  saveCurrentBuffer();
+  saveSplitBuffer();
+  const firstDeletedIndex = Math.min(...selectedFiles.map((file) => project.files.findIndex((item) => item.id === file.id)));
+  const trashDirectoryHandle = await project.lsDirectoryHandle.getDirectoryHandle("Trash", { create: true });
+  const deletedIds = new Set();
+  const failedFiles = [];
+  for (const file of selectedFiles) {
+    try {
+      await moveLsFileToTrash(file, trashDirectoryHandle);
+      deletedIds.add(file.id);
+    } catch {
+      failedFiles.push(file.name);
+    }
+  }
+  if (!deletedIds.size) {
+    projectStatus.textContent = `Unable to delete the selected LS file${selectedFiles.length === 1 ? "" : "s"}.`;
+    return;
+  }
+
+  const currentDeleted = deletedIds.has(currentFileId);
+  const splitDeleted = deletedIds.has(splitFileId);
+  project.files = project.files.filter((file) => !deletedIds.has(file.id));
+  deletedIds.forEach((fileId) => selectedFileIds.delete(fileId));
+  let favoritesWarning = "";
+  try {
+    await persistProjectFavorites();
+  } catch {
+    favoritesWarning = " Project favorites could not be updated in the project manifest.";
+  }
+  if (splitDeleted) {
+    splitFileId = null;
+    setSplitEditorOpen(false);
+  }
+  if (!project.files.length) {
+    currentFileId = null;
+    currentFileNameEl.textContent = "No LS files found";
+    clearEditorState("No LS files found.");
+    setFileSelectionMode(false);
+  } else if (currentDeleted) {
+    currentFileId = null;
+    const nextFile = project.files[Math.min(firstDeletedIndex, project.files.length - 1)];
+    switchFile(nextFile.id);
+    if (!failedFiles.length) setFileSelectionMode(false);
+  } else {
+    if (!failedFiles.length) fileSelectionMode = false;
+    renderFileList();
+    renderSplitFileSelect();
+  }
+  projectStatus.textContent = failedFiles.length
+    ? `Moved ${deletedIds.size} selected LS file${deletedIds.size === 1 ? "" : "s"} to Trash. Unable to delete: ${failedFiles.join(", ")}.${favoritesWarning}`
+    : `Moved ${deletedIds.size} selected LS file${deletedIds.size === 1 ? "" : "s"} to LS Files\\Trash.${favoritesWarning}`;
+  persistSession();
+}
+
 function updateSaveCurrentLsButton() {
   const file = activeEditorState().file;
   saveCurrentLsBtn.disabled = !file?.dirty;
@@ -7651,6 +8017,7 @@ function updateSaveCurrentLsButton() {
     : "The active LS file has no pending edits";
   updateLoadLsFromRobotButton();
   updateCopyCurrentPathButton();
+  updateExportLsToFileButton();
 }
 
 async function saveActiveEditorFile() {
@@ -7723,8 +8090,69 @@ async function exportCurrentFile() {
   projectStatus.textContent = `Exported ${suggestedName}. Original project file was not saved.`;
 }
 
+function lsFilesForWindowsExport() {
+  const selectedFiles = fileSelectionMode ? selectedProjectFiles() : [];
+  if (selectedFiles.length) return selectedFiles;
+  const activeFile = activeEditorState().file;
+  return activeFile ? [activeFile] : [];
+}
+
+function updateExportLsToFileButton() {
+  if (!exportLsToFileBtn) return;
+  const selectedCount = fileSelectionMode ? selectedProjectFiles().length : 0;
+  const activeFile = activeEditorState().file;
+  exportLsToFileBtn.disabled = !project || (!selectedCount && !activeFile);
+  exportLsToFileBtn.title = selectedCount
+    ? `Export ${selectedCount} selected LS file${selectedCount === 1 ? "" : "s"} individually to a chosen Windows folder.`
+    : activeFile
+      ? `Export ${activeFile.name} to a chosen Windows folder.`
+      : "Open or select an LS file before exporting.";
+}
+
+async function exportLsFilesToWindowsFolder() {
+  if (!project) {
+    projectStatus.textContent = "Open a project before exporting LS files.";
+    return;
+  }
+  saveCurrentBuffer();
+  saveSplitBuffer();
+  const files = lsFilesForWindowsExport();
+  if (!files.length) {
+    projectStatus.textContent = "Open an LS file or select files in the project panel before exporting.";
+    return;
+  }
+  projectStatus.textContent = `Choose a Windows folder for ${files.length} LS file${files.length === 1 ? "" : "s"}.`;
+  const response = await fetch("/ls-files/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      files: files.map((file) => ({
+        name: file.name,
+        content: ensureLsEndTrailingBlankLine(file.content)
+      }))
+    })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.ok === false) {
+    if (response.status === 404 || response.status === 405) {
+      throw new Error("The running Robo Programmer server is outdated. Close its server window, then launch Robo Programmer again before exporting LS files.");
+    }
+    throw new Error(result.error || `Local LS export service returned HTTP ${response.status}.`);
+  }
+  if (result.cancelled) {
+    projectStatus.textContent = "LS file export cancelled. No files were written.";
+    return;
+  }
+  const exportedCount = Array.isArray(result.exported) ? result.exported.length : 0;
+  const failures = Array.isArray(result.failures) ? result.failures : [];
+  projectStatus.textContent = failures.length
+    ? `Exported ${exportedCount} of ${files.length} LS files to ${result.destination || "the selected folder"}. Unable to export: ${failures.map((item) => item.name).join(", ")}.`
+    : `Exported ${exportedCount} LS file${exportedCount === 1 ? "" : "s"} individually to ${result.destination || "the selected folder"}.`;
+}
+
 function renderFileList() {
   updateSaveCurrentLsButton();
+  updateFileSelectionControls();
   if (!project) {
     fileListEl.innerHTML = "";
     return;
@@ -7736,7 +8164,8 @@ function renderFileList() {
   }
 
   fileListEl.innerHTML = project.files.map((file) => `
-    <div class="file-item ${file.id === currentFileId ? "active" : ""} ${file.id === splitFileId && !splitEditorPane.hidden ? "split-open" : ""}" data-file-id="${escapeHtml(file.id)}">
+    <div class="file-item ${file.id === currentFileId ? "active" : ""} ${file.id === splitFileId && !splitEditorPane.hidden ? "split-open" : ""} ${selectedFileIds.has(file.id) ? "selected" : ""} ${fileSelectionMode ? "selection-mode" : ""}" data-file-id="${escapeHtml(file.id)}">
+      ${fileSelectionMode ? `<input class="file-select-checkbox" type="checkbox" data-select-file-id="${escapeHtml(file.id)}" ${selectedFileIds.has(file.id) ? "checked" : ""} aria-label="Select ${escapeHtml(file.name)}">` : ""}
       <button class="file-item-main" type="button" data-file-id="${escapeHtml(file.id)}" title="${escapeHtml(file.name)}">
         <span>${escapeHtml(file.name)}</span>
         <span>
@@ -7744,7 +8173,7 @@ function renderFileList() {
           ${file.dirty ? `<span class="dirty">*</span>` : ""}
         </span>
       </button>
-      <button class="favorite-file-button ${file.favorite ? "favorite" : ""}" type="button" data-favorite-file-id="${escapeHtml(file.id)}" aria-pressed="${String(Boolean(file.favorite))}" title="${file.favorite ? "Remove from favorites" : "Add to favorites"}" aria-label="${file.favorite ? `Remove ${escapeHtml(file.name)} from favorites` : `Add ${escapeHtml(file.name)} to favorites`}">${file.favorite ? "&#9733;" : "&#9734;"}</button>
+      ${fileSelectionMode ? "" : `<button class="favorite-file-button ${file.favorite ? "favorite" : ""}" type="button" data-favorite-file-id="${escapeHtml(file.id)}" aria-pressed="${String(Boolean(file.favorite))}" title="${file.favorite ? "Remove from favorites" : "Add to favorites"}" aria-label="${file.favorite ? `Remove ${escapeHtml(file.name)} from favorites` : `Add ${escapeHtml(file.name)} to favorites`}">${file.favorite ? "&#9733;" : "&#9734;"}</button>`}
     </div>
   `).join("");
 }
@@ -8800,6 +9229,12 @@ function renderHighlight() {
       hasIfPairConnector && index === connectorEnd
     ))
     .join("");
+  applyEditorFindHighlight({
+    name: "main",
+    textarea: editor,
+    file: getCurrentFile(),
+    highlighted: highlightedCode
+  });
 }
 
 function flashEditorLine(lineIndex) {
@@ -9630,6 +10065,9 @@ assignmentsWorkspaceTab.addEventListener("click", () => {
 });
 
 popOutAssignmentsBtn.addEventListener("click", popOutAssignments);
+assignmentLiveEditsToggle.addEventListener("change", () => {
+  setAssignmentLiveEdits(assignmentLiveEditsToggle.checked);
+});
 focusAssignmentsPopoutBtn.addEventListener("click", focusAssignmentsPopout);
 
 robotExportWorkspaceTab.addEventListener("click", () => {
@@ -9984,13 +10422,17 @@ assignmentTableWrap.addEventListener("change", async (event) => {
   input.dataset.saving = "true";
   input.setAttribute("aria-busy", "true");
   try {
-    const changed = await saveAssignmentDescription(input.dataset.type, Number(input.dataset.index), input.value);
+    const { changed, live } = await saveDataAssignmentEdit(input.dataset.type, Number(input.dataset.index), input.value);
     if (changed) {
       const updatedFileCount = syncAssignmentChangeToLsFiles(input.dataset.type, Number(input.dataset.index), input.value);
-      assignmentStatus.textContent = `Saved ${input.dataset.type}[${input.dataset.index}] to ${assignmentTemplateFileName} and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`;
+      assignmentStatus.textContent = live
+        ? `Saved ${input.dataset.type}[${input.dataset.index}] to the online robot and ${assignmentTemplateFileName}, and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`
+        : `Saved ${input.dataset.type}[${input.dataset.index}] to ${assignmentTemplateFileName} and synced ${updatedFileCount} LS file${updatedFileCount === 1 ? "" : "s"}.`;
     }
   } catch (error) {
     assignmentStatus.textContent = `Unable to save ${input.dataset.type}[${input.dataset.index}]: ${error.message}`;
+    const cell = assignmentWorkbookData?.assignmentCells.get(assignmentKey(input.dataset.type, Number(input.dataset.index)));
+    if (cell) input.value = cell.description || "";
   } finally {
     delete input.dataset.saving;
     input.removeAttribute("aria-busy");
@@ -10167,6 +10609,14 @@ saveBtn.addEventListener("click", () => {
     projectStatus.textContent = "Unable to save all pending LS file changes.";
   });
 });
+exportLsToFileBtn.addEventListener("click", () => {
+  setFileMenuOpen(false);
+  exportLsFilesToWindowsFolder().catch((error) => {
+    projectStatus.textContent = error.name === "AbortError"
+      ? "LS file export cancelled."
+      : `Unable to export LS file${fileSelectionMode && selectedFileIds.size > 1 ? "s" : ""}: ${error.message}`;
+  });
+});
 pushAssignmentsMenuBtn.addEventListener("click", async () => {
   setFileMenuOpen(false);
   pushAssignmentsMenuBtn.disabled = true;
@@ -10199,6 +10649,7 @@ closeProjectBtn.addEventListener("click", () => {
   closeProject();
 });
 refreshFilesBtn.addEventListener("click", () => {
+  setFileSelectionMode(false);
   refreshProjectFiles().catch(() => {
     projectStatus.textContent = "Refresh cancelled or unable to read the project folder.";
   });
@@ -10416,6 +10867,11 @@ roboPackageInput.addEventListener("change", () => {
 });
 
 fileListEl.addEventListener("click", (event) => {
+  const selectionCheckbox = event.target.closest("[data-select-file-id]");
+  if (selectionCheckbox) {
+    toggleSelectedFile(selectionCheckbox.dataset.selectFileId, selectionCheckbox.checked);
+    return;
+  }
   const favoriteButton = event.target.closest("[data-favorite-file-id]");
   if (favoriteButton) {
     toggleFavoriteFile(favoriteButton.dataset.favoriteFileId).catch((error) => {
@@ -10426,7 +10882,41 @@ fileListEl.addEventListener("click", (event) => {
 
   const item = event.target.closest(".file-item-main");
   if (!item) return;
+  if (fileSelectionMode) {
+    toggleSelectedFile(item.dataset.fileId, !selectedFileIds.has(item.dataset.fileId));
+    return;
+  }
   switchFile(item.dataset.fileId);
+});
+
+selectFilesBtn.addEventListener("click", () => {
+  setFileSelectionMode(!fileSelectionMode);
+});
+
+selectAllFilesBtn.addEventListener("click", () => {
+  selectedFileIds = new Set((project?.files || []).map((file) => file.id));
+  renderFileList();
+});
+
+clearSelectedFilesBtn.addEventListener("click", () => {
+  selectedFileIds.clear();
+  renderFileList();
+});
+
+cancelFileSelectionBtn.addEventListener("click", () => {
+  setFileSelectionMode(false);
+});
+
+saveSelectedLsBtn.addEventListener("click", () => {
+  saveSelectedLsFiles().catch((error) => {
+    projectStatus.textContent = `Unable to save selected LS files: ${error.message}`;
+  });
+});
+
+deleteSelectedLsBtn.addEventListener("click", () => {
+  deleteSelectedLsFiles().catch((error) => {
+    projectStatus.textContent = `Unable to delete selected LS files: ${error.message}`;
+  });
 });
 
 newLsBtn.addEventListener("click", () => {
@@ -10899,6 +11389,8 @@ function showInitialStartScreen() {
   project = null;
   currentFileId = null;
   splitFileId = null;
+  fileSelectionMode = false;
+  selectedFileIds.clear();
   assignmentWorkbookData = null;
   robotCommentComparison = [];
   tagStateCache = new Map();
@@ -10912,6 +11404,7 @@ function showInitialStartScreen() {
   projectNameEl.textContent = "No project";
   projectStatus.textContent = "Open or create a robot project to begin.";
   fileListEl.innerHTML = "";
+  updateFileSelectionControls();
   diagnosticsEl.className = "diagnostics empty";
   diagnosticsEl.textContent = "No checks run yet.";
   referenceSearchInput.value = "";

@@ -475,7 +475,7 @@ select {
 .workspace-tabs button.live-editing-armed,
 .robot-export-tool-tabs button.live-editing-armed {
   border-color: var(--warn);
-  box-shadow: inset 0 -3px 0 var(--warn);
+  box-shadow: inset 0 -1px 0 var(--warn);
   color: var(--ink);
 }
 
@@ -1106,7 +1106,7 @@ select {
 .robot-program-monitor-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
+  grid-template-columns: minmax(400px, 0.75fr) minmax(0, 1.25fr);
   min-height: 360px;
 }
 
@@ -1160,7 +1160,7 @@ select {
   border-radius: 7px;
   display: grid;
   gap: 10px;
-  grid-template-columns: 38px minmax(120px, 0.9fr) minmax(88px, auto) minmax(120px, 1fr) 70px 52px;
+  grid-template-columns: 38px minmax(120px, 0.9fr) minmax(88px, auto) minmax(120px, 1fr);
   padding: 8px 10px;
 }
 
@@ -1179,9 +1179,7 @@ select {
   font-size: 12px;
 }
 
-.robot-program-task-number,
-.robot-program-task-line,
-.robot-program-task-type {
+.robot-program-task-number {
   color: var(--muted);
   font-family: Consolas, "Courier New", monospace;
   font-size: 12px;
@@ -1393,6 +1391,10 @@ select {
   box-shadow: inset 4px 0 0 var(--warn);
   outline: 1px solid var(--warn);
   outline-offset: -1px;
+}
+
+#robotLivePrPanel.live-editing-enabled {
+  box-shadow: inset 1px 0 0 var(--warn);
 }
 
 .live-editing-enabled .robot-pr-section-header {
@@ -1893,11 +1895,10 @@ select {
   }
 
   .robot-program-task-row {
-    grid-template-columns: 34px minmax(100px, 1fr) auto 64px;
+    grid-template-columns: 34px minmax(100px, 1fr) auto;
   }
 
-  .robot-program-task-program,
-  .robot-program-task-type {
+  .robot-program-task-program {
     display: none;
   }
 
@@ -1985,6 +1986,58 @@ select {
 
 .assignments-actions button {
   flex-shrink: 0;
+}
+
+.assignment-live-edit-toggle[hidden] {
+  display: none;
+}
+
+.assignment-live-edit-toggle {
+  position: relative;
+}
+
+.assignment-live-edit-toggle::after {
+  background: var(--editor-bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  content: attr(data-tooltip);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  text-align: left;
+  top: calc(100% + 7px);
+  transform: translateY(-3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  visibility: hidden;
+  white-space: normal;
+  width: min(330px, 78vw);
+  z-index: 20;
+}
+
+.assignment-live-edit-toggle:hover::after,
+.assignment-live-edit-toggle:focus-within::after {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.assignments-view.live-editing-enabled,
+.assignments-popout-shell.live-editing-enabled {
+  background: color-mix(in srgb, var(--warn) 4%, var(--panel));
+  box-shadow: inset 1px 0 0 var(--warn);
+  outline: 1px solid var(--warn);
+  outline-offset: -1px;
+}
+
+.live-editing-enabled .assignment-status {
+  border-bottom-color: color-mix(in srgb, var(--warn) 55%, var(--line));
 }
 
 .assignments-view.is-popped-out > .assignment-sheet-tabs,
@@ -2328,6 +2381,14 @@ select {
   outline: 2px solid color-mix(in srgb, var(--focus) 25%, transparent);
 }
 
+.assignment-description-input:disabled {
+  background: color-mix(in srgb, var(--panel-soft) 82%, var(--editor-bg));
+  border-color: transparent;
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.7;
+}
+
 .assignment-empty {
   color: var(--muted);
   font-size: 13px;
@@ -2372,6 +2433,12 @@ select {
   min-width: 0;
 }
 
+.project-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
 .eyebrow {
   color: var(--muted);
   display: block;
@@ -2407,6 +2474,29 @@ select {
 
 .project-footer button {
   width: 100%;
+}
+
+.project-file-actions,
+.project-bulk-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.project-file-actions[hidden],
+.project-bulk-actions[hidden] {
+  display: none;
+}
+
+.project-bulk-actions > strong {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 2px 0;
+}
+
+.project-bulk-selection-controls {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .project-footer button:disabled {
@@ -2448,6 +2538,24 @@ select {
 .file-item.active {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.file-item.selected {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.file-item.selection-mode {
+  cursor: pointer;
+}
+
+.file-select-checkbox {
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0 2px 0 9px;
+  width: 16px;
 }
 
 .file-item.split-open {
@@ -2869,6 +2977,37 @@ body.resizing .resize-handle::before {
   background: var(--syntax-bang-comment-bg);
   border-radius: 4px;
 }
+
+.line.editor-find-match-line {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-radius: 4px;
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.editor-find-match {
+  animation: editorFindMatchPulse 0.55s ease-out 1;
+  background: color-mix(in srgb, var(--warn) 82%, white);
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 68%, transparent);
+  color: #101418 !important;
+}
+
+.editor-find-match * {
+  color: inherit !important;
+}
+
+@keyframes editorFindMatchPulse {
+  0% {
+    background: white;
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--warn) 38%, transparent);
+  }
+
+  100% {
+    background: color-mix(in srgb, var(--warn) 82%, white);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 68%, transparent);
+  }
+}
+
 .line.if-pair-source-line {
   background: color-mix(in srgb, var(--focus) 12%, transparent);
   border-radius: 4px;
