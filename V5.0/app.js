@@ -79,10 +79,15 @@ const robotLiveOverviewTab = document.querySelector("#robotLiveOverviewTab");
 const robotLiveProgramTab = document.querySelector("#robotLiveProgramTab");
 const robotLiveNumericTab = document.querySelector("#robotLiveNumericTab");
 const robotLivePrTab = document.querySelector("#robotLivePrTab");
+const robotLiveOptionsTab = document.querySelector("#robotLiveOptionsTab");
 const robotLiveOverviewPanel = document.querySelector("#robotLiveOverviewPanel");
 const robotLiveProgramPanel = document.querySelector("#robotLiveProgramPanel");
 const robotLiveNumericPanel = document.querySelector("#robotLiveNumericPanel");
 const robotLivePrPanel = document.querySelector("#robotLivePrPanel");
+const robotLiveOptionsPanel = document.querySelector("#robotLiveOptionsPanel");
+const robotOptionsStatus = document.querySelector("#robotOptionsStatus");
+const robotOptionsSummary = document.querySelector("#robotOptionsSummary");
+const robotOptionsTableWrap = document.querySelector("#robotOptionsTableWrap");
 const robotProgramMonitorStatus = document.querySelector("#robotProgramMonitorStatus");
 const robotProgramMonitorHero = document.querySelector("#robotProgramMonitorHero");
 const robotProgramTaskCount = document.querySelector("#robotProgramTaskCount");
@@ -535,6 +540,11 @@ let robotFlagsAddress = "";
 let robotFlagsLoading = false;
 let robotFlagCommentSaving = false;
 let robotFlagStateSaving = false;
+let robotOptions = [];
+let robotOptionsController = {};
+let robotOptionsAddress = "";
+let robotOptionsLoading = false;
+let robotOptionsLoaded = false;
 let robotLsLoadActive = false;
 const robotOfflineActionTitle = "Go Online with Robot to Use";
 
@@ -4648,19 +4658,22 @@ function setRobotExportTool(tool) {
   robotExportCommentsPanel.hidden = !commentsActive;
 }
 function setLiveRobotTool(tool) {
-  activeLiveRobotTool = ["overview", "program-monitor", "numeric-registers", "position-registers"].includes(tool) ? tool : "overview";
+  activeLiveRobotTool = ["overview", "program-monitor", "numeric-registers", "position-registers", "robot-options"].includes(tool) ? tool : "overview";
   const overviewActive = activeLiveRobotTool === "overview";
   const programActive = activeLiveRobotTool === "program-monitor";
   const numericActive = activeLiveRobotTool === "numeric-registers";
   const prActive = activeLiveRobotTool === "position-registers";
+  const optionsActive = activeLiveRobotTool === "robot-options";
   robotLiveOverviewTab.setAttribute("aria-selected", String(overviewActive));
   robotLiveProgramTab.setAttribute("aria-selected", String(programActive));
   robotLiveNumericTab.setAttribute("aria-selected", String(numericActive));
   robotLivePrTab.setAttribute("aria-selected", String(prActive));
+  robotLiveOptionsTab.setAttribute("aria-selected", String(optionsActive));
   robotLiveOverviewPanel.hidden = !overviewActive;
   robotLiveProgramPanel.hidden = !programActive;
   robotLiveNumericPanel.hidden = !numericActive;
   robotLivePrPanel.hidden = !prActive;
+  robotLiveOptionsPanel.hidden = !optionsActive;
   if (activeWorkspaceView === "robot-position" && robotOnlineStatus === "online") {
     refreshVisibleLiveRobotPanel({ force: true }).catch(() => {});
   }
@@ -4685,6 +4698,8 @@ async function refreshVisibleLiveRobotPanel({ force = false } = {}) {
     await readRobotRegistersAndFlags({ force });
   } else if (activeLiveRobotTool === "position-registers") {
     await readRobotPositionRegisters();
+  } else if (activeLiveRobotTool === "robot-options") {
+    await readRobotOptions();
   }
 }
 function setRobotExportInstructionsOpen(open) {
@@ -5205,6 +5220,79 @@ function robotExtAxisPairs(extAxes = []) {
   }));
 }
 
+function renderRobotOptions() {
+  const controllerFields = [
+    ["Software", robotOptionsController.product],
+    ["Version", robotOptionsController.version],
+    ["Software Edition", robotOptionsController.softwareEdition],
+    ["Root Version", robotOptionsController.rootVersion],
+    ["Controller ID", robotOptionsController.controllerId],
+    ["Robot Number", robotOptionsController.robotNumber]
+  ].filter(([, value]) => String(value || "").trim());
+
+  robotOptionsSummary.innerHTML = controllerFields.length ? controllerFields.map(([label, value]) => `
+    <div class="robot-option-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("") : "";
+
+  robotOptionsTableWrap.innerHTML = robotOptions.length ? `
+    <table class="robot-options-table">
+      <thead>
+        <tr><th>Software</th><th>Order Number</th></tr>
+      </thead>
+      <tbody>
+        ${robotOptions.map((option) => `
+          <tr>
+            <td>${escapeHtml(option.name || "")}</td>
+            <td>${escapeHtml(option.orderNumber || "")}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  ` : `<div class="assignment-empty">${robotOptionsLoaded ? "The robot did not report any loaded software options." : liveRobotOfflineMessage}</div>`;
+}
+
+function resetRobotOptions() {
+  robotOptions = [];
+  robotOptionsController = {};
+  robotOptionsAddress = "";
+  robotOptionsLoading = false;
+  robotOptionsLoaded = false;
+  robotOptionsStatus.textContent = liveRobotOfflineMessage;
+  renderRobotOptions();
+}
+
+async function readRobotOptions() {
+  if (robotOptionsLoading || robotOnlineStatus !== "online") return;
+  if (robotOptionsLoaded && robotOptionsAddress === robotOnlineAddress) {
+    renderRobotOptions();
+    return;
+  }
+
+  robotOptionsLoading = true;
+  robotOptionsStatus.textContent = `Loading software options from ${robotOnlineAddress}...`;
+  try {
+    const robotOrigin = requireOnlineRobot("read Robot Options");
+    const result = await callRobotExportApi("/robot-options/read", { robotAddress: robotOrigin });
+    robotOptions = Array.isArray(result.options) ? result.options : [];
+    robotOptionsController = result.controller && typeof result.controller === "object" ? result.controller : {};
+    robotOptionsAddress = robotOnlineAddress;
+    robotOptionsLoaded = true;
+    renderRobotOptions();
+    robotOptionsStatus.textContent = `Loaded ${robotOptions.length} software option${robotOptions.length === 1 ? "" : "s"} from ${robotOnlineAddress}.`;
+  } catch (error) {
+    robotOptions = [];
+    robotOptionsController = {};
+    robotOptionsLoaded = false;
+    renderRobotOptions();
+    robotOptionsStatus.textContent = `Unable to load Robot Options: ${error.message}`;
+  } finally {
+    robotOptionsLoading = false;
+  }
+}
+
 function resetRobotPositionDisplay() {
   stopRobotPositionLive();
   robotPositionRequestActive = false;
@@ -5221,6 +5309,7 @@ function resetRobotPositionDisplay() {
   resetRobotPositionRegisters();
   resetRobotNumericRegisters();
   resetRobotFlags();
+  resetRobotOptions();
   readRobotPositionBtn.disabled = false;
   startRobotPositionBtn.disabled = false;
   stopRobotPositionBtn.disabled = true;
@@ -10105,6 +10194,11 @@ liveRobotOverviewInstructionsToggle.addEventListener("click", () => {
 
 robotLivePrTab.addEventListener("click", () => {
   setLiveRobotTool("position-registers");
+});
+
+robotLiveOptionsTab.addEventListener("click", () => {
+  if (!confirmDiscardRobotPositionRegisterDraft("open Robot Options")) return;
+  setLiveRobotTool("robot-options");
 });
 
 robotPrEditToggle.addEventListener("change", () => {

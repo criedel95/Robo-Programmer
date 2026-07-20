@@ -624,6 +624,7 @@
             <button id="robotLiveProgramTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveProgramPanel" title="Monitor the current TP or vision program, recent program history, and source context.">Program Monitor</button>
             <button id="robotLiveNumericTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveNumericPanel" title="Monitor current Numeric Register and Flag data from the online robot.">Registers/Flags</button>
             <button id="robotLivePrTab" type="button" role="tab" aria-selected="false" aria-controls="robotLivePrPanel" title="Browse and edit Position Registers on the online robot.">Position Registers</button>
+            <button id="robotLiveOptionsTab" type="button" role="tab" aria-selected="false" aria-controls="robotLiveOptionsPanel" title="View all software loaded on the online robot.">Robot Options</button>
           </div>
           <div id="robotLiveOverviewPanel" class="robot-export-content robot-position-content" role="tabpanel" aria-labelledby="robotLiveOverviewTab">
             <section class="robot-export-instructions">
@@ -756,6 +757,19 @@
                 </div>
                 <div id="robotPrDetails" class="robot-pr-details muted-position">Go online with Robot for Data.</div>
               </div>
+            </section>
+          </div>
+          <div id="robotLiveOptionsPanel" class="robot-export-content robot-options-tab-content" role="tabpanel" aria-labelledby="robotLiveOptionsTab" hidden>
+            <section class="robot-options-section" aria-labelledby="robotOptionsHeading">
+              <div class="robot-pr-section-header">
+                <div>
+                  <span class="eyebrow">Controller Software</span>
+                  <h3 id="robotOptionsHeading">Robot Options</h3>
+                </div>
+                <div id="robotOptionsStatus" class="assignment-status">Go online with Robot for Data.</div>
+              </div>
+              <div id="robotOptionsSummary" class="robot-options-summary"></div>
+              <div id="robotOptionsTableWrap" class="robot-options-table-wrap"><div class="assignment-empty">Go online with Robot for Data.</div></div>
             </section>
           </div>
         </section>

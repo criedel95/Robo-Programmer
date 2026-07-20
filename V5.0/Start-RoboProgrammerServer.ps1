@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 33
+$serverApiVersion = 34
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -623,12 +623,13 @@ function Handle-RobotPositionRequest {
 function Get-RobotPlainTextPage {
   param(
     [string]$HttpOrigin,
-    [string]$Path
+    [string]$Path,
+    [int]$TimeoutMs = 15000
   )
 
   $request = [System.Net.HttpWebRequest]::Create("$HttpOrigin$Path")
   $request.Method = "GET"
-  $request.Timeout = 15000
+  $request.Timeout = $TimeoutMs
   $response = $request.GetResponse()
   try {
     $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
@@ -928,6 +929,70 @@ function Send-RobotCometPositionRegister {
     $message = if ($null -ne $rpc -and $rpc.message) { [string]$rpc.message } else { "Unknown controller error." }
     throw "The robot rejected the Position Register write: $message"
   }
+}
+
+function ConvertFrom-RobotOptionsSummaryText {
+  param([string]$Text)
+
+  $lines = @($Text -split "`n" | ForEach-Object { ([string]$_ -replace '\s+', ' ').Trim() } | Where-Object { $_ })
+  $configStart = -1
+  $configEnd = $lines.Count
+  for ($index = 0; $index -lt $lines.Count; $index += 1) {
+    if ($configStart -lt 0 -and $lines[$index] -match '(?i)^FEATURE:\s*ORD\s+NO:$') {
+      $configStart = $index + 1
+      continue
+    }
+    if ($configStart -ge 0 -and $lines[$index] -match '(?i)^CONFIG2::') {
+      $configEnd = $index
+      break
+    }
+  }
+  if ($configStart -lt 0) { throw "The robot summary did not contain a loaded software CONFIG section." }
+
+  $options = @()
+  $seen = @{}
+  for ($index = $configStart; $index -lt $configEnd; $index += 1) {
+    $match = [regex]::Match($lines[$index], '^(.*?)\s+(\S{4})$')
+    if (-not $match.Success) { continue }
+    $name = $match.Groups[1].Value.Trim()
+    $orderNumber = $match.Groups[2].Value.Trim()
+    if (-not $name) { continue }
+    $key = "$($name.ToUpperInvariant())|$($orderNumber.ToUpperInvariant())"
+    if ($seen.ContainsKey($key)) { continue }
+    $seen[$key] = $true
+    $options += [pscustomobject]@{
+      name = $name
+      orderNumber = $orderNumber
+    }
+  }
+
+  function Find-RobotOptionSummaryValue {
+    param([string[]]$Patterns)
+    foreach ($pattern in $Patterns) {
+      $match = [regex]::Match($Text, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+      if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    }
+    return ""
+  }
+
+  return @{
+    options = @($options)
+    controller = @{
+      product = Find-RobotOptionSummaryValue @('(?m)^\s*VERSION\s*:\s*([^\r\n]+)')
+      version = Find-RobotOptionSummaryValue @('(?m)^\s*\$VERSION\s*:\s*([^\r\n]+)')
+      softwareEdition = Find-RobotOptionSummaryValue @('(?m)^\s*Software\s+Edition\s+No\.\s*:\s*([^\r\n]+)')
+      rootVersion = Find-RobotOptionSummaryValue @('(?m)^\s*Root\s+Version\s*:\s*([^\r\n]+)')
+      controllerId = Find-RobotOptionSummaryValue @('(?m)^\s*Controller\s+ID\s*:\s*([^\r\n]+)')
+      robotNumber = Find-RobotOptionSummaryValue @('(?m)^\s*Robot\s+No\.\s*:\s*([^\r\n]+)')
+    }
+  }
+}
+
+function Get-RobotOptionsSnapshot {
+  param([string]$HttpOrigin)
+
+  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/SUMMARY.DG?_TEMPLATE=FRS:SUMMTMP" 30000
+  return ConvertFrom-RobotOptionsSummaryText $text
 }
 
 function Handle-LsFileExportRequest {
@@ -1786,6 +1851,27 @@ function Handle-RobotLiveStateRequest {
     Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
   }
 }
+function Handle-RobotOptionsRequest {
+  param(
+    [System.Net.Sockets.NetworkStream]$Stream,
+    [string]$RequestBody
+  )
+
+  try {
+    $payload = $RequestBody | ConvertFrom-Json
+    $connection = Get-RobotConnectionInfo ([string]$payload.robotAddress)
+    $snapshot = Get-RobotOptionsSnapshot $connection.HttpOrigin
+    Send-JsonResponse $Stream 200 "OK" @{
+      ok = $true
+      capturedAt = [DateTime]::UtcNow.ToString("o")
+      robotAddress = $connection.HttpOrigin
+      controller = $snapshot.controller
+      options = @($snapshot.options)
+    }
+  } catch {
+    Send-JsonResponse $Stream 400 "Bad Request" @{ ok = $false; error = $_.Exception.Message }
+  }
+}
 function Handle-RobotHeartbeatRequest {
   param(
     [System.Net.Sockets.NetworkStream]$Stream,
@@ -2152,6 +2238,10 @@ try {
       }
       if ($method -eq "POST" -and $pathOnly -eq "/robot-live/state") {
         Handle-RobotLiveStateRequest $stream $requestBody
+        continue
+      }
+      if ($method -eq "POST" -and $pathOnly -eq "/robot-options/read") {
+        Handle-RobotOptionsRequest $stream $requestBody
         continue
       }
       if ($method -eq "POST" -and $pathOnly -eq "/robot-online/ping") {
