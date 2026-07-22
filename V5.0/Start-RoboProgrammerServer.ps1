@@ -6,7 +6,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverApiVersion = 34
+$serverApiVersion = 38
+$robotReadTransportCache = @{}
+$robotTextSnapshotCache = @{}
+$robotTextSnapshotTtlMs = 1500
 
 function Get-ContentType {
   param([string]$FilePath)
@@ -104,7 +107,8 @@ function New-RobotFtpRequest {
   param(
     [string]$HostName,
     [string]$Path,
-    [string]$Method
+    [string]$Method,
+    [int]$TimeoutMs = 15000
   )
 
   $request = [System.Net.FtpWebRequest]::Create("ftp://$HostName/$Path")
@@ -113,8 +117,8 @@ function New-RobotFtpRequest {
   $request.UseBinary = $true
   $request.UsePassive = $true
   $request.KeepAlive = $false
-  $request.Timeout = 15000
-  $request.ReadWriteTimeout = 15000
+  $request.Timeout = $TimeoutMs
+  $request.ReadWriteTimeout = $TimeoutMs
   return $request
 }
 
@@ -217,10 +221,11 @@ function ConvertTo-RobotCompatibleLs {
 function Get-RobotFtpFile {
   param(
     [string]$HostName,
-    [string]$FileName
+    [string]$FileName,
+    [int]$TimeoutMs = 15000
   )
 
-  $request = New-RobotFtpRequest $HostName $FileName ([System.Net.WebRequestMethods+Ftp]::DownloadFile)
+  $request = New-RobotFtpRequest $HostName $FileName ([System.Net.WebRequestMethods+Ftp]::DownloadFile) $TimeoutMs
   $response = $request.GetResponse()
   try {
     $memory = [System.IO.MemoryStream]::new()
@@ -532,7 +537,8 @@ function Get-RobotPositionSnapshot {
 
   $request = [System.Net.HttpWebRequest]::Create("$HttpOrigin/MD/CURPOS.DG")
   $request.Method = "GET"
-  $request.Timeout = 15000
+  $request.Timeout = 3500
+  $request.ReadWriteTimeout = 3500
   $response = $request.GetResponse()
   try {
     $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
@@ -630,6 +636,7 @@ function Get-RobotPlainTextPage {
   $request = [System.Net.HttpWebRequest]::Create("$HttpOrigin$Path")
   $request.Method = "GET"
   $request.Timeout = $TimeoutMs
+  $request.ReadWriteTimeout = $TimeoutMs
   $response = $request.GetResponse()
   try {
     $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
@@ -688,7 +695,7 @@ function Get-RobotSummarySnapshot {
 function Get-RobotAlarmSnapshot {
   param([string]$HttpOrigin)
 
-  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/ERRALL.LS"
+  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/ERRALL.LS" 4000
   $lines = @($text -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   return @($lines | Where-Object { $_ -match "(?i)(SRVO-|INTP-|MOTN-|PROG-|SYST-|HOST-|ASBN-|WARN|ALARM|FAULT|ERROR)" } | Select-Object -First 20)
 }
@@ -701,7 +708,7 @@ function Get-RobotProgramSourceContext {
   )
 
   if ($ProgramName -notmatch '^[A-Z][A-Z0-9_]{0,35}$') { return @() }
-  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/$ProgramName.LS"
+  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/$ProgramName.LS" 4000
   $mnMatch = [regex]::Match($text, '(?is)/MN\s*(.*?)(?=\n\s*/(?:POS|END)\b)')
   if (-not $mnMatch.Success) { return @() }
 
@@ -730,7 +737,7 @@ function Get-RobotProgramSourceContext {
 function Get-RobotProgramMonitorSnapshot {
   param([string]$HttpOrigin)
 
-  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/PRGSTATE.DG"
+  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/PRGSTATE.DG" 3000
   $sectionMatch = [regex]::Match($text, '(?is)TASK STATES:\s*(.*?)(?:PROGRAM STATES:|$)')
   if (-not $sectionMatch.Success) { throw "The robot Program State page did not contain a task-state section." }
   $taskBlocks = @()
@@ -991,7 +998,7 @@ function ConvertFrom-RobotOptionsSummaryText {
 function Get-RobotOptionsSnapshot {
   param([string]$HttpOrigin)
 
-  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/SUMMARY.DG?_TEMPLATE=FRS:SUMMTMP" 30000
+  $text = Get-RobotPlainTextPage $HttpOrigin "/MD/SUMMARY.DG?_TEMPLATE=FRS:SUMMTMP" 10000
   return ConvertFrom-RobotOptionsSummaryText $text
 }
 
@@ -1227,6 +1234,7 @@ function Handle-RobotCommentRequest {
       $encodedComment = [System.Uri]::EscapeDataString($comment)
       $pagePath = "/karel/ComSet?sComment=$encodedComment&sIndx=$index&sFc=$writeCode"
       [void](Get-RobotRawTextPage $connection.HttpOrigin $pagePath 20000)
+      Clear-RobotControllerFileSnapshots $connection.FtpHost
       Send-JsonResponse $Stream 200 "OK" @{ ok = $true }
       return
     }
@@ -1292,55 +1300,88 @@ function ConvertFrom-RobotPositionRegisterText {
   return @($registers)
 }
 
+function Get-RobotControllerFileCacheKey {
+  param([string]$HostName, [string]$FileName)
+  return "$($HostName.Trim().ToLowerInvariant())|$($FileName.Trim().ToUpperInvariant())"
+}
+
+function Clear-RobotControllerFileSnapshots {
+  param([string]$HostName, [string]$FileName = "")
+
+  $hostPrefix = "$($HostName.Trim().ToLowerInvariant())|"
+  foreach ($key in @($robotTextSnapshotCache.Keys)) {
+    if ($key.StartsWith($hostPrefix) -and ([string]::IsNullOrWhiteSpace($FileName) -or $key.EndsWith("|$($FileName.Trim().ToUpperInvariant())"))) {
+      $robotTextSnapshotCache.Remove($key)
+    }
+  }
+}
+
+function Get-RobotControllerFileText {
+  param(
+    [string]$HostName,
+    [string]$HttpOrigin,
+    [string]$FileName,
+    [string]$HttpPath,
+    [switch]$ForceRefresh
+  )
+
+  $cacheKey = Get-RobotControllerFileCacheKey $HostName $FileName
+  if (-not $ForceRefresh -and $robotTextSnapshotCache.ContainsKey($cacheKey)) {
+    $snapshot = $robotTextSnapshotCache[$cacheKey]
+    $ageMs = ([DateTimeOffset]::UtcNow - [DateTimeOffset]$snapshot.capturedAt).TotalMilliseconds
+    if ($ageMs -le $robotTextSnapshotTtlMs) { return [string]$snapshot.text }
+  }
+
+  $preferred = if ($robotReadTransportCache.ContainsKey($cacheKey)) { [string]$robotReadTransportCache[$cacheKey] } else { "" }
+  $transports = if ($preferred -in @("http", "ftp")) { @($preferred) } else { @("http", "ftp") }
+  $errors = @()
+  foreach ($transport in $transports) {
+    if ($transport -eq "http" -and [string]::IsNullOrWhiteSpace($HttpOrigin)) { continue }
+    try {
+      $text = if ($transport -eq "http") {
+        Get-RobotRawTextPage $HttpOrigin $HttpPath 5000
+      } else {
+        [System.Text.Encoding]::ASCII.GetString((Get-RobotFtpFile $HostName $FileName 7000))
+      }
+      $robotReadTransportCache[$cacheKey] = $transport
+      $robotTextSnapshotCache[$cacheKey] = @{
+        capturedAt = [DateTimeOffset]::UtcNow
+        text = [string]$text
+      }
+      return [string]$text
+    } catch {
+      $errors += "${transport}: $($_.Exception.Message)"
+    }
+  }
+  if (-not $preferred) { $robotReadTransportCache.Remove($cacheKey) }
+  throw "Unable to read $FileName from $HostName. $($errors -join ' ')"
+}
+
 function Get-RobotPositionRegisterText {
   param(
     [string]$HostName,
-    [string]$HttpOrigin = ""
+    [string]$HttpOrigin = "",
+    [switch]$ForceRefresh
   )
-
-  if (-not [string]::IsNullOrWhiteSpace($HttpOrigin)) {
-    try {
-      return Get-RobotRawTextPage $HttpOrigin "/MD/POSREG.VA" 15000
-    } catch {
-      # Older controllers may not publish POSREG.VA over HTTP; retain FTP as a read fallback.
-    }
-  }
-  $bytes = Get-RobotFtpFile $HostName "POSREG.VA"
-  return [System.Text.Encoding]::ASCII.GetString($bytes)
+  return Get-RobotControllerFileText $HostName $HttpOrigin "POSREG.VA" "/MD/POSREG.VA" -ForceRefresh:$ForceRefresh
 }
 
 function Get-RobotNumericRegisterText {
   param(
     [string]$HostName,
-    [string]$HttpOrigin = ""
+    [string]$HttpOrigin = "",
+    [switch]$ForceRefresh
   )
-
-  if (-not [string]::IsNullOrWhiteSpace($HttpOrigin)) {
-    try {
-      return Get-RobotRawTextPage $HttpOrigin "/MD/NUMREG.VA" 15000
-    } catch {
-      # Older controllers may not publish NUMREG.VA over HTTP; retain FTP as a read fallback.
-    }
-  }
-  $bytes = Get-RobotFtpFile $HostName "NUMREG.VA"
-  return [System.Text.Encoding]::ASCII.GetString($bytes)
+  return Get-RobotControllerFileText $HostName $HttpOrigin "NUMREG.VA" "/MD/NUMREG.VA" -ForceRefresh:$ForceRefresh
 }
 
 function Get-RobotIoStateText {
   param(
     [string]$HostName,
-    [string]$HttpOrigin = ""
+    [string]$HttpOrigin = "",
+    [switch]$ForceRefresh
   )
-
-  if (-not [string]::IsNullOrWhiteSpace($HttpOrigin)) {
-    try {
-      return Get-RobotRawTextPage $HttpOrigin "/MD/IOSTATE.DG" 15000
-    } catch {
-      # Retain FTP as a fallback for controllers that do not publish IOSTATE.DG over HTTP.
-    }
-  }
-  $bytes = Get-RobotFtpFile $HostName "IOSTATE.DG"
-  return [System.Text.Encoding]::ASCII.GetString($bytes)
+  return Get-RobotControllerFileText $HostName $HttpOrigin "IOSTATE.DG" "/MD/IOSTATE.DG" -ForceRefresh:$ForceRefresh
 }
 
 function ConvertFrom-RobotNumericRegisterText {
@@ -1517,7 +1558,7 @@ function Handle-RobotNumericRegisterRequest {
       $actual = $null
       foreach ($delay in @(150, 350, 750)) {
         Start-Sleep -Milliseconds $delay
-        $verified = @(ConvertFrom-RobotNumericRegisterText (Get-RobotNumericRegisterText $connection.FtpHost $connection.HttpOrigin))
+        $verified = @(ConvertFrom-RobotNumericRegisterText (Get-RobotNumericRegisterText $connection.FtpHost $connection.HttpOrigin -ForceRefresh))
         $actual = Find-RobotNumericRegister $verified $index
         if ($null -ne $actual -and [Math]::Abs([double]$actual.value - $value) -le 0.000001) { break }
       }
@@ -1572,7 +1613,7 @@ function Handle-RobotFlagRequest {
       $actual = $null
       foreach ($delay in @(150, 350, 750)) {
         Start-Sleep -Milliseconds $delay
-        $verified = @(ConvertFrom-RobotFlagStateText (Get-RobotIoStateText $connection.FtpHost $connection.HttpOrigin))
+        $verified = @(ConvertFrom-RobotFlagStateText (Get-RobotIoStateText $connection.FtpHost $connection.HttpOrigin -ForceRefresh))
         $actual = $verified | Where-Object { [int]$_.index -eq $index } | Select-Object -First 1
         if ($null -ne $actual -and [string]$actual.state -eq $state) { break }
       }
@@ -1779,7 +1820,7 @@ function Handle-RobotPositionRegisterRequest {
         $actual = $null
         foreach ($delay in @(250, 500, 750)) {
           Start-Sleep -Milliseconds $delay
-          $verifiedRegisters = @(ConvertFrom-RobotPositionRegisterText (Get-RobotPositionRegisterText $connection.FtpHost $connection.HttpOrigin))
+          $verifiedRegisters = @(ConvertFrom-RobotPositionRegisterText (Get-RobotPositionRegisterText $connection.FtpHost $connection.HttpOrigin -ForceRefresh))
           $actual = $verifiedRegisters | Where-Object { $_.group -eq $group -and $_.index -eq $index } | Select-Object -First 1
           if (Test-RobotPositionRegisterMatch $actual $expected) { break }
         }
@@ -1802,6 +1843,7 @@ function Handle-RobotPositionRegisterRequest {
         } catch {
           $rollbackError = " Rollback also failed: $($_.Exception.Message)"
         }
+        Clear-RobotControllerFileSnapshots $connection.FtpHost "POSREG.VA"
         throw "Position Register write failed: $writeError$rollbackError"
       }
 
@@ -1825,14 +1867,8 @@ function Handle-RobotLiveStateRequest {
     $connection = Get-RobotConnectionInfo ([string]$payload.robotAddress)
     $position = Get-RobotPositionSnapshot $connection.HttpOrigin
     $position.robotAddress = $connection.HttpOrigin
-    $summary = $null
     $alarms = @()
     $warnings = @()
-    try {
-      $summary = Get-RobotSummarySnapshot $connection.HttpOrigin
-    } catch {
-      $warnings += "Summary unavailable: $($_.Exception.Message)"
-    }
     try {
       $alarms = @(Get-RobotAlarmSnapshot $connection.HttpOrigin)
     } catch {
@@ -1843,7 +1879,6 @@ function Handle-RobotLiveStateRequest {
       capturedAt = [DateTime]::UtcNow.ToString("o")
       robotAddress = $connection.HttpOrigin
       position = $position
-      summary = $summary
       alarms = $alarms
       warnings = $warnings
     }
@@ -1881,7 +1916,7 @@ function Handle-RobotHeartbeatRequest {
   try {
     $payload = $RequestBody | ConvertFrom-Json
     $connection = Get-RobotConnectionInfo ([string]$payload.robotAddress)
-    [void](Get-RobotRawTextPage $connection.HttpOrigin "/MD/CURPOS.DG" 10000)
+    [void](Get-RobotRawTextPage $connection.HttpOrigin "/MD/CURPOS.DG" 4000)
     Send-JsonResponse $Stream 200 "OK" @{
       ok = $true
       capturedAt = [DateTime]::UtcNow.ToString("o")

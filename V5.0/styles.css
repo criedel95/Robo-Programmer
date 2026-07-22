@@ -1472,13 +1472,9 @@ select {
 
 .robot-export-content.live-editing-enabled {
   background: color-mix(in srgb, var(--warn) 4%, transparent);
-  box-shadow: inset 4px 0 0 var(--warn);
+  box-shadow: inset 1px 0 0 var(--warn);
   outline: 1px solid var(--warn);
   outline-offset: -1px;
-}
-
-#robotLivePrPanel.live-editing-enabled {
-  box-shadow: inset 1px 0 0 var(--warn);
 }
 
 .live-editing-enabled .robot-pr-section-header {

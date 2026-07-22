@@ -1813,6 +1813,40 @@ async function copyCurrentLsPath() {
   projectStatus.textContent = `Copied path: ${filePath}`;
 }
 
+function unwrapRobotLsContinuationLines(content) {
+  const lines = String(content || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const unwrapped = [];
+  let inMotionSection = false;
+
+  lines.forEach((line) => {
+    if (/^\s*\/MN\s*$/i.test(line)) {
+      inMotionSection = true;
+      unwrapped.push(line);
+      return;
+    }
+    if (/^\s*\/(?:POS|END)\s*$/i.test(line)) {
+      inMotionSection = false;
+      unwrapped.push(line);
+      return;
+    }
+
+    const continuation = inMotionSection ? line.match(/^\s*:\s*(.*)$/) : null;
+    const previousIndex = unwrapped.length - 1;
+    const previous = previousIndex >= 0 ? unwrapped[previousIndex] : "";
+    const canJoin = continuation
+      && /^\s*\d+\s*:/.test(previous)
+      && !/;\s*$/.test(previous);
+    if (canJoin) {
+      const continuationText = continuation[1].trim();
+      unwrapped[previousIndex] = `${previous.trimEnd()}${continuationText ? ` ${continuationText}` : ""}`;
+      return;
+    }
+    unwrapped.push(line);
+  });
+
+  return unwrapped.join("\n");
+}
+
 async function downloadRobotLsProgram(robotOrigin, remoteName) {
   const response = await fetch("/robot-backup/file", {
     method: "POST",
@@ -1824,10 +1858,10 @@ async function downloadRobotLsProgram(robotOrigin, remoteName) {
     throw new Error(result.error || `Robot file download returned HTTP ${response.status}.`);
   }
 
-  const robotContent = new TextDecoder("utf-8")
+  const robotContent = unwrapRobotLsContinuationLines(new TextDecoder("utf-8")
     .decode(new Uint8Array(await response.arrayBuffer()))
     .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
+    .replace(/\r/g, "\n"));
   if (!/^\s*\/PROG\s+/im.test(robotContent) || !/^\s*\/END\s*$/im.test(robotContent)) {
     throw new Error(`${remoteName} was downloaded, but it does not contain a complete FANUC LS program.`);
   }
@@ -2338,9 +2372,6 @@ function loadProject(nextProject) {
   }));
   persistSession();
   primeAssignmentWorkbookData(nextProject).catch(() => {});
-  if (robotOnlineStatus === "online") {
-    runRobotExportAutoCheck().catch(() => {});
-  }
 }
 
 function sortFiles(files) {
@@ -3436,6 +3467,7 @@ function setWorkspaceView(view) {
     loadAssignmentsView();
   } else if (activeWorkspaceView === "robot-export") {
     renderRobotExportPrograms();
+    if (robotOnlineStatus === "online") runRobotExportAutoCheck().catch(() => {});
   } else if (activeWorkspaceView === "robot-position" && robotOnlineStatus !== "online") {
     resetRobotPositionDisplay();
   } else if (activeWorkspaceView === "robot-position") {
@@ -4554,21 +4586,36 @@ async function checkRobotOnline({ manual = false } = {}) {
   }
   try {
     const robotOrigin = await rememberRobotOnlineAddress(address);
-    const overviewVisible = activeWorkspaceView === "robot-position" && activeLiveRobotTool === "overview";
+    const liveRobotVisible = activeWorkspaceView === "robot-position";
+    const overviewVisible = liveRobotVisible && activeLiveRobotTool === "overview";
+    const activePanelCanValidate = robotOnlineStatus === "online"
+      && liveRobotVisible
+      && ["overview", "program-monitor", "numeric-registers"].includes(activeLiveRobotTool);
     if (overviewVisible) {
-      await readRobotLiveOverview({ robotOrigin, signal: robotOnlineAbortController.signal });
+      try {
+        await readRobotLiveOverview({ robotOrigin, signal: robotOnlineAbortController.signal });
+      } catch (panelError) {
+        robotPositionStatus.textContent = `Live Robot Overview is temporarily unavailable: ${panelError.message}`;
+        await callRobotExportApi("/robot-online/ping", { robotAddress: robotOrigin }, { signal: robotOnlineAbortController.signal });
+      }
+    } else if (activePanelCanValidate) {
+      try {
+        await refreshVisibleLiveRobotPanel({ force: true });
+      } catch {
+        await callRobotExportApi("/robot-online/ping", { robotAddress: robotOrigin }, { signal: robotOnlineAbortController.signal });
+      }
     } else {
       await callRobotExportApi("/robot-online/ping", { robotAddress: robotOrigin }, { signal: robotOnlineAbortController.signal });
     }
     setRobotOnlineUi("online", `Online with ${robotOnlineAddress}. Refreshing every ${robotOnlinePollMs / 1000} seconds.`);
     startRobotOnlineMonitor();
-    if (activeWorkspaceView === "robot-position" && (!overviewVisible || activeLiveRobotTool !== "overview")) {
+    if (liveRobotVisible && !overviewVisible && !activePanelCanValidate) {
       try {
         await refreshVisibleLiveRobotPanel({ force: true });
       } catch {
       }
     }
-    await runRobotExportAutoCheck({ force: manual });
+    if (activeWorkspaceView === "robot-export") await runRobotExportAutoCheck({ force: manual });
   } catch (error) {
     if (error.name === "AbortError") {
       setRobotOnlineUi("offline", robotOnlineAddress ? `Connection canceled. Saved robot: ${robotOnlineAddress}` : "Connection canceled.");
@@ -5221,6 +5268,16 @@ function robotExtAxisPairs(extAxes = []) {
 }
 
 function renderRobotOptions() {
+  const sortedOptions = [...robotOptions].sort((left, right) => (
+    String(left?.name || "").localeCompare(String(right?.name || ""), undefined, {
+      numeric: true,
+      sensitivity: "base"
+    })
+    || String(left?.orderNumber || "").localeCompare(String(right?.orderNumber || ""), undefined, {
+      numeric: true,
+      sensitivity: "base"
+    })
+  ));
   const controllerFields = [
     ["Software", robotOptionsController.product],
     ["Version", robotOptionsController.version],
@@ -5243,7 +5300,7 @@ function renderRobotOptions() {
         <tr><th>Software</th><th>Order Number</th></tr>
       </thead>
       <tbody>
-        ${robotOptions.map((option) => `
+        ${sortedOptions.map((option) => `
           <tr>
             <td>${escapeHtml(option.name || "")}</td>
             <td>${escapeHtml(option.orderNumber || "")}</td>
@@ -5607,7 +5664,19 @@ function resetRobotFlags() {
 function renderRobotNumericRegisters() {
   const visible = robotNumericRegisters;
   const editsDisabled = robotRegisterEditsEnabled() ? "" : " disabled";
-  robotNumericTableWrap.innerHTML = visible.length ? `
+  if (!visible.length) {
+    robotNumericTableWrap.innerHTML = `<div class="assignment-empty">No Numeric Register data is loaded.</div>`;
+    return;
+  }
+
+  const valueInputs = [...robotNumericTableWrap.querySelectorAll(".robot-numeric-value-input")];
+  const commentInputs = [...robotNumericTableWrap.querySelectorAll(".robot-numeric-comment-input")];
+  const tableMatches = valueInputs.length === visible.length
+    && commentInputs.length === visible.length
+    && valueInputs.every((input, index) => Number(input.dataset.index) === Number(visible[index].index));
+
+  if (!tableMatches) {
+    robotNumericTableWrap.innerHTML = `
     <table class="robot-comments-table robot-numeric-table">
       <colgroup>
         <col class="robot-numeric-register-col">
@@ -5650,7 +5719,22 @@ function renderRobotNumericRegisters() {
         }).join("")}
       </tbody>
     </table>
-  ` : `<div class="assignment-empty">No Numeric Register data is loaded.</div>`;
+    `;
+    return;
+  }
+
+  valueInputs.forEach((input, index) => {
+    const value = formatRobotNumericValue(visible[index].value);
+    if (input.value !== value) input.value = value;
+    input.dataset.original = value;
+    input.title = value;
+  });
+  commentInputs.forEach((input, index) => {
+    const comment = visible[index].comment || "";
+    if (input.value !== comment) input.value = comment;
+    input.dataset.original = comment;
+    input.title = comment || "No comment";
+  });
 }
 
 function robotNumericCommentEditActive() {
@@ -5679,7 +5763,19 @@ function robotFlagStateClass(state) {
 function renderRobotFlags() {
   const visible = robotFlags;
   const editsDisabled = robotRegisterEditsEnabled() ? "" : " disabled";
-  robotFlagTableWrap.innerHTML = visible.length ? `
+  if (!visible.length) {
+    robotFlagTableWrap.innerHTML = `<div class="assignment-empty">No Flag data is loaded.</div>`;
+    return;
+  }
+
+  const stateSelects = [...robotFlagTableWrap.querySelectorAll(".robot-flag-state-select")];
+  const commentInputs = [...robotFlagTableWrap.querySelectorAll(".robot-flag-comment-input")];
+  const tableMatches = stateSelects.length === visible.length
+    && commentInputs.length === visible.length
+    && stateSelects.every((select, index) => Number(select.dataset.index) === Number(visible[index].index));
+
+  if (!tableMatches) {
+    robotFlagTableWrap.innerHTML = `
     <table class="robot-comments-table robot-numeric-table robot-flag-table">
       <colgroup>
         <col class="robot-flag-index-col">
@@ -5723,7 +5819,24 @@ function renderRobotFlags() {
         }).join("")}
       </tbody>
     </table>
-  ` : `<div class="assignment-empty">No Flag data is loaded.</div>`;
+    `;
+    return;
+  }
+
+  stateSelects.forEach((select, index) => {
+    const state = String(visible[index].state || "").toUpperCase();
+    if (select.value !== state && ["ON", "OFF"].includes(state)) select.value = state;
+    select.dataset.original = state;
+    select.title = state || "--";
+    select.classList.remove("robot-flag-state-on", "robot-flag-state-off", "robot-flag-state-unknown");
+    select.classList.add(robotFlagStateClass(state));
+  });
+  commentInputs.forEach((input, index) => {
+    const comment = visible[index].comment || "";
+    if (input.value !== comment) input.value = comment;
+    input.dataset.original = comment;
+    input.title = comment || "No comment";
+  });
 }
 
 function applyRobotRegisterEditState() {
@@ -5843,14 +5956,17 @@ async function saveRobotFlagState(index, state) {
 }
 
 async function readRobotNumericRegisters({ force = false } = {}) {
-  if (robotNumericRegistersLoading) return;
-  if (robotNumericCommentSaving || robotNumericValueSaving || robotNumericCommentEditActive()) return;
+  if (robotNumericRegistersLoading) return false;
+  if (robotNumericCommentSaving || robotNumericValueSaving || robotNumericCommentEditActive()) return false;
   if (robotOnlineStatus !== "online") {
     resetRobotNumericRegisters();
-    return;
+    return false;
   }
-  if (!force && robotNumericRegistersAddress === robotOnlineAddress && robotNumericRegisters.length) return;
+  if (!force && robotNumericRegistersAddress === robotOnlineAddress && robotNumericRegisters.length) return false;
   robotNumericRegistersLoading = true;
+  if (!robotNumericRegisters.length) {
+    robotNumericTableWrap.innerHTML = `<div class="assignment-empty">Loading Numeric Registers from ${escapeHtml(robotOnlineAddress)}...</div>`;
+  }
   try {
     const robotOrigin = requireOnlineRobot("read Numeric Registers");
     const result = await callRobotExportApi("/robot-numeric-registers/read", { robotAddress: robotOrigin });
@@ -5860,6 +5976,7 @@ async function readRobotNumericRegisters({ force = false } = {}) {
     robotNumericRegistersAddress = robotOnlineAddress;
     robotNumericRegistersUpdatedAt = result.capturedAt || new Date().toISOString();
     renderRobotNumericRegisters();
+    return true;
   } catch (error) {
     robotNumericTableWrap.innerHTML = `<div class="assignment-empty">Numeric Register data is unavailable: ${escapeHtml(error.message)}</div>`;
     throw error;
@@ -5869,14 +5986,17 @@ async function readRobotNumericRegisters({ force = false } = {}) {
 }
 
 async function readRobotFlags({ force = false } = {}) {
-  if (robotFlagsLoading) return;
-  if (robotFlagCommentSaving || robotFlagStateSaving || robotFlagCommentEditActive()) return;
+  if (robotFlagsLoading) return false;
+  if (robotFlagCommentSaving || robotFlagStateSaving || robotFlagCommentEditActive()) return false;
   if (robotOnlineStatus !== "online") {
     resetRobotFlags();
-    return;
+    return false;
   }
-  if (!force && robotFlagsAddress === robotOnlineAddress && robotFlags.length) return;
+  if (!force && robotFlagsAddress === robotOnlineAddress && robotFlags.length) return false;
   robotFlagsLoading = true;
+  if (!robotFlags.length) {
+    robotFlagTableWrap.innerHTML = `<div class="assignment-empty">Loading Flags from ${escapeHtml(robotOnlineAddress)}...</div>`;
+  }
   try {
     const robotOrigin = requireOnlineRobot("read Flags");
     const result = await callRobotExportApi("/robot-flags/read", { robotAddress: robotOrigin });
@@ -5891,6 +6011,7 @@ async function readRobotFlags({ force = false } = {}) {
       .sort((a, b) => a.index - b.index);
     robotFlagsAddress = robotOnlineAddress;
     renderRobotFlags();
+    return true;
   } catch (error) {
     robotFlagTableWrap.innerHTML = `<div class="assignment-empty">Flag data is unavailable: ${escapeHtml(error.message)}</div>`;
     throw error;
@@ -5900,10 +6021,25 @@ async function readRobotFlags({ force = false } = {}) {
 }
 
 async function readRobotRegistersAndFlags({ force = false } = {}) {
-  await Promise.allSettled([
-    readRobotNumericRegisters({ force }),
-    readRobotFlags({ force })
-  ]);
+  const reads = [
+    () => readRobotNumericRegisters({ force }),
+    () => readRobotFlags({ force })
+  ];
+  let successCount = 0;
+  let lastError = null;
+  for (const read of reads) {
+    try {
+      if (await read()) successCount += 1;
+    } catch (error) {
+      lastError = error;
+      // Keep the other pane available and retry the failed read on the next online refresh.
+    }
+  }
+  if (!successCount && lastError) throw lastError;
+  if (!successCount) {
+    const robotOrigin = requireOnlineRobot("check Registers/Flags connection");
+    await callRobotExportApi("/robot-online/ping", { robotAddress: robotOrigin });
+  }
 }
 
 function robotPositionRegisterKey(register) {
