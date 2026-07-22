@@ -294,6 +294,9 @@ const robotOnlineAddressListKey = "robo-programmer-online-robot-addresses";
 const robotOnlineAddressProfilesKey = "robo-programmer-online-robot-profiles";
 const robotOnlinePollMs = 5000;
 const liveRobotOfflineMessage = "Go online with Robot for Data.";
+const robotPrJointPositionToleranceDeg = 0.1;
+const robotPrCartesianPositionToleranceMm = 0.5;
+const robotPrCartesianAngleToleranceDeg = 0.5;
 
 function savedEditorFontSize() {
   const stored = Number(localStorage.getItem(editorFontSizeKey));
@@ -529,6 +532,8 @@ let robotPositionRegistersAddress = "";
 let robotPositionRegistersLoading = false;
 let robotPositionRegisterCommitActive = false;
 let robotPositionRecordedDraftKey = "";
+let robotPositionRegisterMatchRequestActive = false;
+let robotPositionRegisterMatch = { key: "", state: "unknown", detail: "" };
 let robotNumericRegisters = [];
 let robotNumericRegistersAddress = "";
 let robotNumericRegistersLoading = false;
@@ -4745,6 +4750,7 @@ async function refreshVisibleLiveRobotPanel({ force = false } = {}) {
     await readRobotRegistersAndFlags({ force });
   } else if (activeLiveRobotTool === "position-registers") {
     await readRobotPositionRegisters();
+    await refreshRobotPositionRegisterMatch();
   } else if (activeLiveRobotTool === "robot-options") {
     await readRobotOptions();
   }
@@ -6132,10 +6138,11 @@ function renderRobotPositionRegisterList() {
   robotPrList.innerHTML = visible.length ? visible.map((register) => {
     const key = robotPositionRegisterKey(register);
     const selected = key === selectedRobotPositionRegisterKey;
+    const atPosition = selected && robotPositionRegisterMatch.key === key && robotPositionRegisterMatch.state === "at";
     const label = register.comment || (register.mode === "uninitialized" ? "Uninitialized" : "No comment");
     const modeLabel = register.mode === "joint" ? "Joint" : register.mode === "cartesian" ? "Cartesian" : "Uninitialized";
     return `
-      <button class="robot-pr-list-item" type="button" role="option" data-pr-key="${escapeHtml(key)}" aria-selected="${String(selected)}" title="Open PR[${register.index}] (${escapeHtml(label)}) for review and editing.">
+      <button class="robot-pr-list-item${atPosition ? " is-at-position" : ""}" type="button" role="option" data-pr-key="${escapeHtml(key)}" aria-selected="${String(selected)}" title="Open PR[${register.index}] (${escapeHtml(label)}) for review and editing.">
         <strong>PR[${register.index}]</strong>
         <span title="${escapeHtml(label)}">${escapeHtml(label)}<small>${escapeHtml(modeLabel)} | Group ${register.group}</small></span>
       </button>
@@ -6172,7 +6179,10 @@ function renderRobotPositionRegisterDetails() {
   robotPrDetails.innerHTML = `
     <form id="robotPrForm" class="robot-pr-form">
       <div class="robot-pr-form-header">
-        <h4>PR[${register.index}]</h4>
+        <div class="robot-pr-form-title">
+          <h4>PR[${register.index}]</h4>
+          <span id="robotPrPositionMatch" class="robot-pr-position-match" role="status" hidden></span>
+        </div>
         <span>${escapeHtml(sourceModeLabel)} | Group ${register.group}</span>
       </div>
       <div class="robot-pr-fields">
@@ -6212,7 +6222,116 @@ function renderRobotPositionRegisterDetails() {
       </div>
     </form>
   `;
+  updateRobotPositionRegisterMatchDisplay();
   updateRobotPositionRegisterDirtyState();
+}
+
+function robotPositionAngularDifference(left, right) {
+  const difference = Math.abs(Number(left) - Number(right)) % 360;
+  return Math.min(difference, 360 - difference);
+}
+
+function compareRobotPositionRegisterToSnapshot(register, snapshot) {
+  if (!register || register.mode === "uninitialized") {
+    return { state: "unavailable", detail: "This Position Register is uninitialized." };
+  }
+  if (Number(snapshot?.group) !== Number(register.group)) {
+    return { state: "not-at", detail: `The robot is reporting motion group ${snapshot?.group ?? "unknown"}.` };
+  }
+
+  if (register.mode === "joint") {
+    const currentJoints = new Map((Array.isArray(snapshot.joints) ? snapshot.joints : [])
+      .map((joint) => [String(joint.axis || "").toUpperCase(), Number(joint.value)]));
+    const axes = Object.keys(register.values || {}).filter((axis) => /^J\d+$/i.test(axis));
+    if (!axes.length || axes.some((axis) => !Number.isFinite(currentJoints.get(axis.toUpperCase())))) {
+      return { state: "unavailable", detail: "The robot did not report every joint needed for this Position Register." };
+    }
+    const largestDifference = Math.max(...axes.map((axis) => (
+      Math.abs(currentJoints.get(axis.toUpperCase()) - Number(register.values[axis]))
+    )));
+    return largestDifference <= robotPrJointPositionToleranceDeg
+      ? { state: "at", detail: `All joints are within ${robotPrJointPositionToleranceDeg} deg.` }
+      : { state: "not-at", detail: `Largest joint difference: ${largestDifference.toFixed(3)} deg.` };
+  }
+
+  const currentValues = snapshot.userFrame?.values || {};
+  const axes = ["X", "Y", "Z", "W", "P", "R"];
+  if (axes.some((axis) => !Number.isFinite(Number(currentValues[axis])) || !Number.isFinite(Number(register.values?.[axis])))) {
+    return { state: "unavailable", detail: "The robot did not report every Cartesian value needed for this Position Register." };
+  }
+  const currentConfigText = String(snapshot.userFrame?.config || "").trim();
+  if (!/^[NF]\s+[UD]\s+[TB]\s*,\s*-?\d+\s*,\s*-?\d+\s*,\s*-?\d+$/i.test(currentConfigText)) {
+    return { state: "unavailable", detail: "The robot did not report a readable Cartesian configuration." };
+  }
+  const currentConfig = robotPositionRegisterConfigParts(currentConfigText);
+  const registerConfig = robotPositionRegisterConfigParts(register.config || "");
+  if (JSON.stringify(currentConfig) !== JSON.stringify(registerConfig)) {
+    return { state: "not-at", detail: "The robot configuration does not match this Position Register." };
+  }
+  const linearDifference = Math.max(...["X", "Y", "Z"].map((axis) => (
+    Math.abs(Number(currentValues[axis]) - Number(register.values[axis]))
+  )));
+  const angularDifference = Math.max(...["W", "P", "R"].map((axis) => (
+    robotPositionAngularDifference(currentValues[axis], register.values[axis])
+  )));
+  return linearDifference <= robotPrCartesianPositionToleranceMm && angularDifference <= robotPrCartesianAngleToleranceDeg
+    ? { state: "at", detail: `Within ${robotPrCartesianPositionToleranceMm} mm and ${robotPrCartesianAngleToleranceDeg} deg.` }
+    : { state: "not-at", detail: `Difference: ${linearDifference.toFixed(3)} mm, ${angularDifference.toFixed(3)} deg.` };
+}
+
+function updateRobotPositionRegisterMatchDisplay() {
+  const register = selectedRobotPositionRegister();
+  const badge = document.querySelector("#robotPrPositionMatch");
+  if (!register || !badge) return;
+  const key = robotPositionRegisterKey(register);
+  const match = robotPositionRegisterMatch.key === key
+    ? robotPositionRegisterMatch
+    : { state: "pending", detail: "" };
+  const labels = {
+    at: `At PR[${register.index}]`,
+    "not-at": `Not at PR[${register.index}]`,
+    unavailable: "Position unavailable",
+    unknown: "Position unavailable"
+  };
+  badge.hidden = match.state === "pending";
+  badge.className = `robot-pr-position-match is-${match.state}`;
+  badge.textContent = labels[match.state] || labels.unknown;
+  badge.title = match.detail || "Current-position comparison is unavailable.";
+  const selectedButton = robotPrList.querySelector(`[data-pr-key="${CSS.escape(key)}"]`);
+  selectedButton?.classList.toggle("is-at-position", match.state === "at");
+}
+
+async function refreshRobotPositionRegisterMatch() {
+  const register = selectedRobotPositionRegister();
+  if (robotPositionRegisterMatchRequestActive || robotOnlineStatus !== "online" || !register) return false;
+  const key = robotPositionRegisterKey(register);
+  if (register.mode === "uninitialized") {
+    robotPositionRegisterMatch = { key, state: "unavailable", detail: "This Position Register is uninitialized." };
+    updateRobotPositionRegisterMatchDisplay();
+    return true;
+  }
+
+  robotPositionRegisterMatchRequestActive = true;
+  if (robotPositionRegisterMatch.key !== key) {
+    robotPositionRegisterMatch = { key, state: "pending", detail: "" };
+    updateRobotPositionRegisterMatchDisplay();
+  }
+  try {
+    const robotOrigin = requireOnlineRobot("compare the current position to a Position Register");
+    const snapshot = await callRobotExportApi("/robot-position/current", { robotAddress: robotOrigin });
+    if (selectedRobotPositionRegisterKey !== key || robotOnlineStatus !== "online") return false;
+    robotPositionRegisterMatch = { key, ...compareRobotPositionRegisterToSnapshot(register, snapshot) };
+    updateRobotPositionRegisterMatchDisplay();
+    return true;
+  } catch (error) {
+    if (selectedRobotPositionRegisterKey === key) {
+      robotPositionRegisterMatch = { key, state: "unavailable", detail: error.message };
+      updateRobotPositionRegisterMatchDisplay();
+    }
+    return false;
+  } finally {
+    robotPositionRegisterMatchRequestActive = false;
+  }
 }
 
 function collectRobotPositionRegisterForm() {
@@ -6309,6 +6428,8 @@ function resetRobotPositionRegisters() {
   robotPositionRegistersLoading = false;
   robotPositionRegisterCommitActive = false;
   robotPositionRecordedDraftKey = "";
+  robotPositionRegisterMatchRequestActive = false;
+  robotPositionRegisterMatch = { key: "", state: "unknown", detail: "" };
   robotPrSearch.value = "";
   robotPrList.innerHTML = "";
   robotPrDetails.classList.add("muted-position");
@@ -10355,8 +10476,10 @@ robotPrList.addEventListener("click", (event) => {
   if (!button) return;
   if (button.dataset.prKey !== selectedRobotPositionRegisterKey && !confirmDiscardRobotPositionRegisterDraft("open another Position Register")) return;
   selectedRobotPositionRegisterKey = button.dataset.prKey;
+  robotPositionRegisterMatch = { key: selectedRobotPositionRegisterKey, state: "pending", detail: "" };
   renderRobotPositionRegisterList();
   renderRobotPositionRegisterDetails();
+  refreshRobotPositionRegisterMatch().catch(() => {});
 });
 
 robotPrDetails.addEventListener("input", (event) => {
